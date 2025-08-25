@@ -1,4 +1,3 @@
-
 function get_rpath(recipe::LinkRecipe)
     if recipe.rpath !== nothing
         local base_token
@@ -112,4 +111,3 @@ function link_products(recipe::LinkRecipe)
         error("\nCompilation failed: ", e)
     end
 end
-
