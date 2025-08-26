@@ -63,7 +63,7 @@ function compile_products(recipe::ImageRecipe)
     # Ensure the app project is instantiated and precompiled
     project_arg = recipe.project == "" ? Base.active_project() : recipe.project
     env_overrides = Dict{String,Any}()
-    inst_cmd = addenv(`$(julia_cmd) --project=$project_arg -e "using Pkg; Pkg.precompile()"`, env_overrides...)
+    inst_cmd = addenv(`$(Base.julia_cmd()) --project=$project_arg -e "using Pkg; Pkg.instantiate(); Pkg.precompile()"`, env_overrides...)
     recipe.verbose && println("Running: $inst_cmd")
     precompile_time = time_ns()
     if !success(pipeline(inst_cmd; stdout, stderr))
