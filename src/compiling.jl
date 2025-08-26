@@ -1,4 +1,3 @@
-
 # Lightweight terminal spinner
 function _start_spinner(message::String; io::IO=stderr)
     anim_chars = ("◐", "◓", "◑", "◒")
@@ -39,7 +38,6 @@ function _start_spinner(message::String; io::IO=stderr)
 end
 
 function compile_products(recipe::ImageRecipe)
-
     # Only strip IR / metadata if not `--trim=no`
     strip_args = String[]
     if recipe.enable_trim
@@ -92,7 +90,7 @@ function compile_products(recipe::ImageRecipe)
     cmd = addenv(cmd, "OPENBLAS_NUM_THREADS" => 1, "JULIA_NUM_THREADS" => 1)
     recipe.verbose && println("Running: $cmd")
     # Show a spinner while the compiler runs
-    spinner_done, spinner_task = _start_spinner("Compiling image...")
+    spinner_done, spinner_task = _start_spinner("Compiling...")
     compile_time = time_ns()
     try
         if !success(pipeline(cmd; stdout, stderr))
@@ -140,4 +138,3 @@ function compile_products(recipe::ImageRecipe)
         end
     end
 end
-

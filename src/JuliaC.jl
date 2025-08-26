@@ -1,11 +1,13 @@
 module JuliaC
+
 using Pkg
 using PackageCompiler
 using LazyArtifacts
 
 module JuliaConfig
-    include("julia-config.jl")
+    include(joinpath(Sys.BINDIR, Base.DATAROOTDIR, "julia", "julia-config.jl"))
 end
+
 Base.@kwdef mutable struct ImageRecipe
     # codegen options
     cpu_target::Union{String, Nothing} = nothing
@@ -60,7 +62,7 @@ function _print_usage(io::IO=stdout)
     println(io, "  --output-o <path>           Output object archive (default for linking)")
     println(io, "  --output-bc <path>          Output LLVM bitcode archive")
     println(io, "  --project <path>            App project to instantiate/precompile")
-    println(io, "  --bundle [dir]              Bundle libjulia, stdlibs, and artifacts")
+    println(io, "  --bundle <dir>              Bundle libjulia, stdlibs, and artifacts")
     println(io, "  --trim[=mode]               Strip IR/metadata (e.g. --trim=safe)")
     println(io, "  --compile-ccallable         Export ccallable entrypoints")
     println(io, "  --experimental              Forwarded to Julia (needed for some --trim)")
@@ -115,6 +117,8 @@ function _parse_cli_args(args::Vector{String})
             if i < length(args) && (length(args[i+1]) == 0 || args[i+1][1] != '-')
                 bundle_recipe.output_dir = args[i+1]
                 i += 1
+            else
+                error("--bundle requires an argument")
             end
         elseif arg == "--verbose"
             image_recipe.verbose = true
@@ -156,10 +160,8 @@ function _main_cli(args::Vector{String}; io::IO=stdout)
     bundle_products(bun)
 end
 
-# Define @main entrypoint without macro syntax in signature to keep linters happy
-@eval function (@main)(ARGS)
+function (@main)(ARGS)
     _main_cli(ARGS)
 end
-
 
 end # module JuliaC
