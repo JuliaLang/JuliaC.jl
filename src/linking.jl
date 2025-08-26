@@ -66,6 +66,7 @@ function get_compiler_cmd(; cplusplus::Bool=false)
 end
 
 function link_products(recipe::LinkRecipe)
+    link_start = time_ns()
     image_recipe = recipe.image_recipe
     if image_recipe.output_type == "--output-o" || image_recipe.output_type == "--output-bc"
         mkpath(dirname(recipe.outname))
@@ -74,6 +75,12 @@ function link_products(recipe::LinkRecipe)
             rm(recipe.outname; force=true)
         end
         mv(image_recipe.img_path, recipe.outname; force=true)
+        println("Linking took $((time_ns() - link_start)/1e9) s")
+        try
+            out_sz = stat(recipe.outname).size
+            println("Linked artifact size: ", Base.format_bytes(out_sz))
+        catch
+        end
         return
     end
     if image_recipe.output_type == "--output-lib" || image_recipe.output_type == "--output-sysimage"
@@ -109,5 +116,11 @@ function link_products(recipe::LinkRecipe)
         run(cmd2)
     catch e
         error("\nCompilation failed: ", e)
+    end
+    println("Linking took $((time_ns() - link_start)/1e9) s")
+    try
+        out_sz = stat(recipe.outname).size
+        println("Linked artifact size: ", Base.format_bytes(out_sz))
+    catch
     end
 end

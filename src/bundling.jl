@@ -1,4 +1,5 @@
 function bundle_products(recipe::BundleRecipe)
+    bundle_start = time_ns()
 
     if recipe.output_dir === nothing
         return
@@ -94,5 +95,17 @@ function bundle_products(recipe::BundleRecipe)
                 end
             end
         end
+    end
+    # Summarize bundle size
+    try
+        total = 0
+        for (root, _, files) in walkdir(recipe.output_dir)
+            for f in files
+                total += stat(joinpath(root, f)).size
+            end
+        end
+        println("Bundling took $((time_ns() - bundle_start)/1e9) s")
+        println("Bundle size: ", Base.format_bytes(total))
+    catch
     end
 end

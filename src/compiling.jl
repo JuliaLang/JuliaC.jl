@@ -101,6 +101,13 @@ function compile_products(recipe::ImageRecipe)
         wait(spinner_task)
     end
     println("Compilation took $((time_ns() - compile_time)/1e9) s")
+    # Print compiled image size
+    try
+        img_sz = stat(recipe.img_path).size
+        println("Image size: ", Base.format_bytes(img_sz))
+    catch
+        # ignore size errors
+    end
     # If C shim sources are provided, compile them to objects for linking stage
     if !isempty(recipe.c_sources)
         compiler_cmd = JuliaC.get_compiler_cmd()
