@@ -56,6 +56,10 @@ function compile_products(recipe::ImageRecipe)
     else
         image_arg = "--output-o"
     end
+    # Default: export ccallable entrypoints for shared libraries
+    if recipe.output_type == "--output-lib" && recipe.add_ccallables == false
+        recipe.add_ccallables = true
+    end
     if recipe.cpu_target === nothing
         recipe.cpu_target = get(ENV,"JULIA_CPU_TARGET", nothing)
     end
@@ -122,11 +126,6 @@ function compile_products(recipe::ImageRecipe)
             end
         end
         cflags = isempty(user_cflags) ? default_cflags : vcat(default_cflags, user_cflags)
-        new_cflags = ``
-        for flag in cflags
-            new_cflags = `$new_cflags $flag`
-        end
-        @show new_cflags
         for csrc in recipe.c_sources
             obj = replace(csrc, ".c" => ".o")
             try
