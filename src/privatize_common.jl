@@ -3,6 +3,8 @@ Common privatization logic shared between macOS and Linux.
 """
 
 using Base: BinaryPlatforms
+using Mmap
+using ObjectFile
 
 function privatize_libjulia_common!(recipe::BundleRecipe; 
                                    platform_ext::String,
@@ -30,74 +32,80 @@ function privatize_libjulia_common!(recipe::BundleRecipe;
         return
     end
 
-    # Find all libjulia libraries, but only process the actual files (not symlinks)
-    libs = String[]
+    # Gather libjulia files
+    real_files = String[]
+    symlink_files = String[]
     for search_dir in search_dirs
         for (root, _, files) in walkdir(search_dir)
             for f in files
-                if endswith(f, platform_ext) && occursin("libjulia", f)
-                    libpath = joinpath(root, f)
-                    # Only process actual files, not symlinks
-                    if !islink(libpath)
-                        push!(libs, libpath)
+                occursin("libjulia", f) || continue
+                p = joinpath(root, f)
+                if islink(p)
+                    push!(symlink_files, p)
+                else
+                    # Optional extension filter; keep anything that looks like a library file
+                    if endswith(f, platform_ext) || occursin(platform_ext * ".", f)
+                        push!(real_files, p)
                     end
                 end
             end
         end
     end
-    isempty(libs) && return
+    isempty(real_files) && return
 
     salt = random_salt(8)
     salted_paths = Dict{String,String}()
     base_to_salted = Dict{String,String}()
-    # First, create all salted libraries (salt_ + original basename)
-    esc_ext = escape_string(platform_ext)
-    for p in libs
+    originals_to_remove = String[]
+
+    # 1) Salt all real library files
+    for p in real_files
         base = basename(p)
         salted_base = string(salt, "_", base)
         salted_path = joinpath(dirname(p), salted_base)
         cp(p, salted_path; force=true)
-        # Update soname/install_name_id
+        push!(originals_to_remove, p)
+        # Update install_name/soname for salted copy
         if install_name_id_func! !== nothing
             install_name_id_func!(salted_path, dep_prefix * salted_base)
         end
         if set_soname_func! !== nothing
             set_soname_func!(salted_path, salted_base)
         end
-        # Create SALTED symlinks (short/medium variants) alongside the salted copy
-        if occursin("libjulia", base)
-            dir = dirname(p)
-            # Derive unsalted medium/short basenames from the original, then salt the link names
-            medium = replace(base, Regex("\\.\\d+" * escape_string(platform_ext) * raw"$") => platform_ext)
-            short = replace(base, Regex("\\.\\d+(\\.\\d+){0,2}" * escape_string(platform_ext) * raw"$") => platform_ext)
-            salted_medium = string(salt, "_", medium)
-            salted_short = string(salt, "_", short)
-            for linkname in (salted_medium, salted_short)
-                if linkname != salted_base
-                    linkpath = joinpath(dir, linkname)
-                    if islink(linkpath) || isfile(linkpath)
-                        rm(linkpath; force=true)
-                    end
-                    try
-                        symlink(salted_base, linkpath)
-                    catch
-                        cp(salted_path, linkpath; force=true)
-                    end
-                end
-            end
-        end
         salted_paths[p] = salted_path
-        # Map all common libjulia name variants to the salted full
         base_to_salted[base] = salted_base
-        # medium version (libjulia.1.12.ext)
-        medium = replace(base, Regex("\\.\\d+" * escape_string(platform_ext) * raw"$") => platform_ext)
-        if medium != base
-            base_to_salted[medium] = salted_base
+        if occursin("libjulia", base) && !occursin("-internal", base) && !occursin("-codegen", base) && !islink(salted_path)
+            replace_dep_libs(salted_path, salt)
         end
-        # short name (libjulia.ext)
-        short = replace(base, Regex("\\.\\d+(\\.\\d+){0,2}" * escape_string(platform_ext) * raw"$") => platform_ext)
-        if short != base && short != medium
-            base_to_salted[short] = salted_base
+    end
+
+    # 2) For every existing symlink, create a salted symlink with the salted basename
+    for lnk in symlink_files
+        dir = dirname(lnk)
+        link_base = basename(lnk)
+        target = readlink(lnk)
+        target_base = target === nothing ? nothing : basename(target)
+        salted_target_base = (target_base !== nothing && haskey(base_to_salted, target_base)) ? base_to_salted[target_base] : nothing
+        # If we don't know the salted target, try to best-effort point to any salted full we created (same dir)
+        if salted_target_base === nothing && !isempty(values(salted_paths))
+            salted_target_base = basename(first(values(salted_paths)))
+        end
+        salted_link = joinpath(dir, string(salt, "_", link_base))
+        if salted_target_base !== nothing
+            isfile(salted_link) || islink(salted_link) ? rm(salted_link; force=true) : nothing
+            try
+                symlink(salted_target_base, salted_link)
+            catch e
+                @warn "Symlink failed; falling back to copying salted target" link=salted_link target=salted_target_base exception=e
+                # Fallback to copying if symlink creation fails; let any copy error propagate
+                src = joinpath(dir, salted_target_base)
+                isfile(src) || error("Salted target not found for copy fallback", src)
+                cp(src, salted_link; force=true)
+            end
+            # Record that this symlink basename should be rewritten to the salted target
+            base_to_salted[link_base] = salted_target_base
+            # Schedule original symlink for removal
+            push!(originals_to_remove, lnk)
         end
     end
 
@@ -105,34 +113,40 @@ function privatize_libjulia_common!(recipe::BundleRecipe;
     all_targets = collect(values(salted_paths))
     push!(all_targets, product)
     for t in unique(all_targets)
-        for (old, new) in replacements_for(t, base_to_salted, get_deps_func, dep_prefix)
+        reps = replacements_for(t, base_to_salted, get_deps_func, dep_prefix)
+        if recipe.link_recipe.image_recipe.verbose && !isempty(reps)
+            println("Privatize: updating deps for ", t)
+            for (old,new) in reps
+                println("  ", old, " -> ", new)
+            end
+        end
+        for (old, new) in reps
             install_name_change_func!(t, old, new)
         end
     end
     
-    # Then remove the original libraries (after all dependency updates are done)
-    for p in libs
-        rm(p; force=true)
-    end
-
-    # Remove any remaining UNSALTED libjulia* symlinks; keep only salted symlinks
-    for search_dir in search_dirs
-        for (root, _, files) in walkdir(search_dir)
-            for f in files
-                if occursin("libjulia", f) && endswith(f, platform_ext)
-                    p = joinpath(root, f)
-                    if islink(p) && !startswith(basename(p), string(salt, "_"))
-                        try
-                            rm(p; force=true)
-                        catch
-                        end
-                    end
-                end
-            end
-        end
+    # Remove originals after all dependency updates are applied
+    for path in unique(originals_to_remove)
+        rm(path; force=true)
     end
 
     return salted_paths
+end
+
+const DEP_LIBS_LENGTH = 512 # This is technically 1024 bytes, but we use 512 to be safe
+
+function replace_dep_libs(file, salt)
+    obj = only(readmeta(open(file, "r")))
+    syms = collect(Symbols(obj))
+    syms_names = symbol_name.(syms)
+    sym = syms[findfirst(syms_names .== mangle_symbol_name(obj, "dep_libs"))]
+    offset = symbol_offset(sym)
+    fileh = open(file, "r+")
+    filem = Mmap.mmap(fileh)
+    data = String(filem[offset : (offset + DEP_LIBS_LENGTH - 1)])
+    new_data = Vector{UInt8}(replace(data, "libjulia" => salt * "_" * "libjulia")[begin:DEP_LIBS_LENGTH])
+    filem[offset : (offset + DEP_LIBS_LENGTH - 1)] .= new_data
+    Mmap.sync!(filem)
 end
 
 function replacements_for(bin::String, base_to_salted::Dict{String,String}, get_deps_func::Function, dep_prefix::String)

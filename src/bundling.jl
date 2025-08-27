@@ -70,7 +70,40 @@ function bundle_products(recipe::BundleRecipe)
     end
     # Use relative rpath layout by default (handled by linking with empty rpath string)
 
-    # No-op: avoid creating unsalted macOS libjulia symlinks; privatization will manage salted symlinks only
+    # On macOS, ensure expected dylib version symlinks exist (e.g., libjulia.1.12.dylib -> libjulia.1.12.0.dylib)
+    if Sys.isapple()
+        julia_dir = joinpath(recipe.output_dir, libdir, "julia")
+        if isdir(julia_dir)
+            # Map of base name to the symlink we want
+            wanted = [
+                ("libjulia", "1.12"),
+                ("libjulia-internal", "1.12"),
+            ]
+            for (base, shortver) in wanted
+                target = joinpath(julia_dir, string(base, ".", shortver, ".dylib"))
+                if !isfile(target)
+                    # Find the highest semantic versioned dylib for this base
+                    candidates = filter(readdir(julia_dir)) do f
+                        startswith(f, base * ".") && endswith(f, ".dylib")
+                    end
+                    if !isempty(candidates)
+                        # Prefer the longest version string (most specific)
+                        best = sort(candidates, by=length, rev=true)[1]
+                        # Try symlink first; if it fails, copy as a fallback
+                        try
+                            symlink(best, target)
+                        catch
+                            try
+                                cp(joinpath(julia_dir, best), target; force=true)
+                            catch
+                                # ignore if copy fails; test will fail and surface issue
+                            end
+                        end
+                    end
+                end
+            end
+        end
+    end
 
     # Perform library removal operations
     remove_unnecessary_libraries(recipe)
@@ -82,19 +115,12 @@ function bundle_products(recipe::BundleRecipe)
 
     # On macOS, codesign the bundled binaries to avoid Gatekeeper kills when loading
     if Sys.isapple()
-        try
-            _codesign_bundle!(recipe)
-        catch e
-            @warn "Codesign step failed" exception=(e, catch_backtrace())
-        end
+        _codesign_bundle!(recipe)
     end
 
     # Now perform all directory removals at once
     for dir in dirs_to_remove
-        try
-            rm(dir; force=true, recursive=true)
-        catch
-        end
+        rm(dir; force=true, recursive=true)
     end
 end
 
@@ -135,17 +161,9 @@ end
 
 function privatize_libjulia!(recipe::BundleRecipe)
     if Sys.isapple()
-        try
-            privatize_libjulia_macos!(recipe)
-        catch e
-            @warn "Failed to privatize libjulia on macOS" exception=(e, catch_backtrace())
-        end
+        privatize_libjulia_macos!(recipe)
     elseif Sys.islinux()
-        try
-            privatize_libjulia_linux!(recipe)
-        catch e
-            @warn "Failed to privatize libjulia on Linux" exception=(e, catch_backtrace())
-        end
+        privatize_libjulia_linux!(recipe)
     else
         @warn "Privatization not implemented for this OS"
     end
@@ -176,10 +194,7 @@ function _codesign_bundle!(recipe::BundleRecipe)
     # Clear quarantine attributes first
     if xattr !== nothing
         for p in to_sign
-            try
-                run(`$xattr -dr com.apple.quarantine $p`)
-            catch
-            end
+            run(`$xattr -dr com.apple.quarantine $p`)
         end
     end
     # Narrow signing set: primary artifact and salted libjulia* copies only
@@ -197,11 +212,7 @@ function _codesign_bundle!(recipe::BundleRecipe)
         if islink(p)
             continue
         end
-        try
-            run(`$cs -f -s - --deep --timestamp=none $p`)
-        catch e
-            @warn "codesign failed" file=p exception=(e, catch_backtrace())
-        end
+        run(`$cs -f -s - --deep --timestamp=none $p`)
     end
 end
 end

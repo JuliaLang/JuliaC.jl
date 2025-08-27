@@ -6,7 +6,7 @@ function get_rpath(recipe::LinkRecipe)
         elseif Sys.islinux()
             base_token = "-Wl,-rpath,'\$ORIGIN/"
         else
-            @warn "no path set"
+            @warn "get_rpath not implemented for this platform"
             return ""
         end
         # If rpath is a relative subdir (e.g., "lib"), emit @loader_path/lib and @loader_path/lib/julia
@@ -116,10 +116,9 @@ function link_products(recipe::LinkRecipe)
     catch e
         error("\nCompilation failed: ", e)
     end
-    println("Linking took $((time_ns() - link_start)/1e9) s")
-    try
+    image_recipe.verbose && println("Linking took $((time_ns() - link_start)/1e9) s")
+    if image_recipe.verbose && isfile(recipe.outname)
         out_sz = stat(recipe.outname).size
         println("Linked artifact size: ", Base.format_bytes(out_sz))
-    catch
     end
 end

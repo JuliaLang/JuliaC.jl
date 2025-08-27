@@ -22,7 +22,8 @@ function privatize_libjulia_macos!(recipe::BundleRecipe)
             dep_prefix = "@rpath/"
         )
     catch e
-        @warn "Failed to privatize libjulia on macOS" exception=(e, catch_backtrace())
+        @warn "Failed to privatize libjulia on macOS" exception=e
+        rethrow()
     end
 end
 
