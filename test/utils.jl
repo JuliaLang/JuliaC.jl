@@ -5,11 +5,15 @@ function _dir_size(root::AbstractString)
     if isdir(root)
         for (r, _, files) in walkdir(root)
             for f in files
-                total += stat(joinpath(r, f)).size
+                p = joinpath(r, f)
+                islink(p) && continue
+                total += stat(p).size
             end
         end
     elseif isfile(root)
-        total = stat(root).size
+        if !islink(root)
+            total = stat(root).size
+        end
     end
     return total
 end
@@ -22,6 +26,7 @@ function print_tree_with_sizes(root::AbstractString; io::IO=stdout)
         for (r, _, files) in walkdir(root)
             for f in files
                 p = joinpath(r, f)
+                islink(p) && continue
                 file_sizes[p] = stat(p).size
             end
         end
@@ -32,6 +37,7 @@ function print_tree_with_sizes(root::AbstractString; io::IO=stdout)
             sz = _dir_size(path)
             println(io, prefix, basename(path), "/ (", Base.format_bytes(sz), ")")
             entries = readdir(path)
+            entries = filter(name -> !islink(joinpath(path, name)), entries)
             sort!(entries)
             for (idx, name) in enumerate(entries)
                 child = joinpath(path, name)
@@ -42,13 +48,15 @@ function print_tree_with_sizes(root::AbstractString; io::IO=stdout)
                     print(io, prefix, branch)
                     print_node(child, subprefix)
                 else
-                    szf = get(file_sizes, child, isfile(child) ? stat(child).size : 0)
+                    szf = get(file_sizes, child, isfile(child) && !islink(child) ? stat(child).size : 0)
                     println(io, prefix, branch, name, " (", Base.format_bytes(szf), ")")
                 end
             end
         else
-            szf = get(file_sizes, path, isfile(path) ? stat(path).size : 0)
-            println(io, prefix, basename(path), " (", Base.format_bytes(szf), ")")
+            if !islink(path)
+                szf = get(file_sizes, path, isfile(path) ? stat(path).size : 0)
+                println(io, prefix, basename(path), " (", Base.format_bytes(szf), ")")
+            end
         end
     end
     print_node(abspath(root), "")
