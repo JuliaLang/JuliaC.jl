@@ -164,4 +164,6 @@ function (@main)(ARGS)
     _main_cli(ARGS)
 end
 
+precompile(main, (Vector{String},))
+
 end # module JuliaC
