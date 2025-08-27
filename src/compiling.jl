@@ -62,7 +62,7 @@ function compile_products(recipe::ImageRecipe)
     julia_cmd = `$(Base.julia_cmd(;cpu_target=recipe.cpu_target)) --startup-file=no --history-file=no`
     # Ensure the app project is instantiated and precompiled
     project_arg = recipe.project == "" ? Base.active_project() : recipe.project
-    env_overrides = Dict{String,Any}()
+    env_overrides = Dict{String,Any}("JULIA_LOAD_PATH"=>nothing, "JULIA_DEPOT_PATH"=>nothing)
     inst_cmd = addenv(`$(Base.julia_cmd()) --project=$project_arg -e "using Pkg; Pkg.instantiate(); Pkg.precompile()"`, env_overrides...)
     recipe.verbose && println("Running: $inst_cmd")
     precompile_time = time_ns()
@@ -87,7 +87,7 @@ function compile_products(recipe::ImageRecipe)
     end
     cmd = `$cmd $(joinpath(@__DIR__, "scripts", "juliac-buildscript.jl")) $(abspath(recipe.file)) $(recipe.output_type) $(string(recipe.add_ccallables))`
     # Threading
-    cmd = addenv(cmd, "OPENBLAS_NUM_THREADS" => 1, "JULIA_NUM_THREADS" => 1)
+    cmd = addenv(cmd, "OPENBLAS_NUM_THREADS" => 1, "JULIA_NUM_THREADS" => 1, env_overrides...)
     recipe.verbose && println("Running: $cmd")
     # Show a spinner while the compiler runs
     spinner_done, spinner_task = _start_spinner("Compiling...")
