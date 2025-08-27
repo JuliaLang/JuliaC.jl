@@ -20,8 +20,8 @@ function privatize_libjulia_linux!(recipe::BundleRecipe)
             platform_ext = ".so",
             install_name_id_func! = nothing,  # Linux uses SONAME instead
             install_name_change_func! = patchelf_replace_needed!,
-            # Keep original SONAMEs to allow coexisting with already-loaded libjulia in this process
-            set_soname_func! = nothing,
+            # Ensure salted libraries carry salted SONAMEs
+            set_soname_func! = patchelf_set_soname!,
             get_deps_func = get_dependencies_linux,
             dep_prefix = ""  # On Linux, DT_NEEDED entries are basenames
         )

@@ -1,6 +1,7 @@
 using Test
 using JuliaC
 using Libdl
+using Patchelf_jll
 
 const ROOT = abspath(joinpath(@__DIR__, ".."))
 const TEST_PROJ = abspath(joinpath(@__DIR__, "app_project"))
@@ -67,10 +68,10 @@ include("utils.jl")
             @test !isempty(salted)
             for f in salted
                 if Sys.isapple()
-                    out = try read(`otool -D $(f)`, String) catch; "" end
+                    out = read(`otool -D $(f)`, String)
                     @test occursin("@rpath/", out)
                 elseif Sys.islinux()
-                    out = try read(`$(Patchelf_jll.patchelf()) --print-soname $(f)`, String) catch; "" end
+                    out = read(`$(Patchelf_jll.patchelf()) --print-soname $(f)`, String)
                     @test occursin("_libjulia", out)
                 end
             end
