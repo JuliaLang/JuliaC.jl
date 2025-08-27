@@ -126,31 +126,14 @@ end
 
 function remove_unnecessary_libraries(recipe::BundleRecipe)
     bundle_root = recipe.output_dir
-    julia_dir = joinpath(bundle_root, recipe.libdir, "julia")
+    julia_dir = joinpath(bundle_root, recipe.libdir)
     !isdir(julia_dir) && return
-
-    # If trim was enabled, remove large, unnecessary libraries such as LLVM from the bundle
-    # Only do this for library bundles; executables may still require LLVM at runtime
-    if recipe.link_recipe.image_recipe.enable_trim && recipe.link_recipe.image_recipe.output_type != "--output-exe"
+    # If trim is enable remove codegen
+    if recipe.link_recipe.image_recipe.enable_trim
         for (root, _, files) in walkdir(julia_dir)
             for f in files
-                if occursin("libLLVM", f)
-                    try
-                        rm(joinpath(root, f); force=true)
-                    catch
-                    end
-                end
-            end
-        end
-    end
-
-    # Remove libjulia-codegen if present (it's not needed for most applications)
-    for (root, _, files) in walkdir(bundle_root)
-        for f in files
-            if occursin("libjulia-codegen", f)
-                try
+                if occursin("libLLVM", f) || occursin("libjulia-codegen", f)
                     rm(joinpath(root, f); force=true)
-                catch
                 end
             end
         end
