@@ -64,15 +64,16 @@ function privatize_libjulia_common!(recipe::BundleRecipe;
         if set_soname_func! !== nothing
             set_soname_func!(salted_path, salted_base)
         end
-        # Create compatibility symlinks alongside the salted copy (minimal, only for libjulia*)
+        # Create SALTED symlinks (short/medium variants) alongside the salted copy
         if occursin("libjulia", base)
             dir = dirname(p)
-            # Unsalted medium and short basenames
+            # Derive unsalted medium/short basenames from the original, then salt the link names
             medium = replace(base, Regex("\\.\\d+" * escape_string(platform_ext) * raw"$") => platform_ext)
             short = replace(base, Regex("\\.\\d+(\\.\\d+){0,2}" * escape_string(platform_ext) * raw"$") => platform_ext)
-            # Point unsalted medium/short to the salted full basename
-            for linkname in (medium, short)
-                if linkname != base
+            salted_medium = string(salt, "_", medium)
+            salted_short = string(salt, "_", short)
+            for linkname in (salted_medium, salted_short)
+                if linkname != salted_base
                     linkpath = joinpath(dir, linkname)
                     if islink(linkpath) || isfile(linkpath)
                         rm(linkpath; force=true)
@@ -112,6 +113,23 @@ function privatize_libjulia_common!(recipe::BundleRecipe;
     # Then remove the original libraries (after all dependency updates are done)
     for p in libs
         rm(p; force=true)
+    end
+
+    # Remove any remaining UNSALTED libjulia* symlinks; keep only salted symlinks
+    for search_dir in search_dirs
+        for (root, _, files) in walkdir(search_dir)
+            for f in files
+                if occursin("libjulia", f) && endswith(f, platform_ext)
+                    p = joinpath(root, f)
+                    if islink(p) && !startswith(basename(p), string(salt, "_"))
+                        try
+                            rm(p; force=true)
+                        catch
+                        end
+                    end
+                end
+            end
+        end
     end
 
     return salted_paths
