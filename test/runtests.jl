@@ -5,6 +5,8 @@ const ROOT = abspath(joinpath(@__DIR__, ".."))
 const TEST_PROJ = abspath(joinpath(@__DIR__, "app_project"))
 const TEST_SRC = joinpath(TEST_PROJ, "src", "test.jl")
 
+include("utils.jl")
+
 @testset "Programmatic API (trim)" begin
     outdir = mktempdir()
     # Build a sysimage object file programmatically
@@ -29,6 +31,8 @@ const TEST_SRC = joinpath(TEST_PROJ, "src", "test.jl")
     bun = JuliaC.BundleRecipe(link_recipe=link, output_dir=bundle_dir)
     JuliaC.bundle_products(bun)
     @test isdir(bundle_dir)
+    # Print tree for debugging/inspection
+    print_tree_with_sizes(bundle_dir)
 end
 
 @testset "Programmatic binary (trim)" begin
@@ -52,6 +56,8 @@ end
     @test isfile(actual_exe)
     output = read(`$actual_exe`, String)
     @test occursin("Fast compilation test!", output)
+    # Print tree for debugging/inspection
+    print_tree_with_sizes(outdir)
 end
 
 @testset "CLI app entrypoint (trim)" begin
@@ -63,6 +69,7 @@ end
         "--trim=safe",
         TEST_SRC,
         "--bundle", outdir,
+        "--verbose",
     ]
     # Invoke the module's CLI entrypoint directly to avoid any argument quoting issues
     JuliaC._main_cli(cliargs)
@@ -72,6 +79,8 @@ end
     # Execute the binary and capture output
     output = read(`$actual_exe`, String)
     @test occursin("Fast compilation test!", output)
+    # Print tree for debugging/inspection
+    print_tree_with_sizes(outdir)
 end
 
 
