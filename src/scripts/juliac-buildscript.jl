@@ -67,11 +67,20 @@ let mod = Base.include(Main, ARGS[1])
     #entrypoint(join, (Base.GenericIOBuffer{Memory{UInt8}}, Array{String, 1}, Char))
     entrypoint(Base.task_done_hook, (Task,))
     entrypoint(Base.wait, ())
-    entrypoint(Base.poptask, (Base.StickyWorkqueue,))
+    if isdefined(Base, :poptask)
+        entrypoint(Base.poptask, (Base.StickyWorkqueue,))
+    end
+    if isdefined(Base, :wait_forever)
+        entrypoint(Base.wait_forever, ())
+    end
     entrypoint(Base.trypoptask, (Base.StickyWorkqueue,))
     entrypoint(Base.checktaskempty, ())
     if ARGS[3] == "true"
-        ccall(:jl_add_ccallable_entrypoints, Cvoid, ())
+        if isdefined(Base.Compiler, :add_ccallable_entrypoints!)
+            Base.Compiler.add_ccallable_entrypoints!()
+        else
+            ccall(:jl_add_ccallable_entrypoints, Cvoid, ())
+        end
     end
 end
 
