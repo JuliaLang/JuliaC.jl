@@ -33,9 +33,27 @@ function _main(argc::Cint, argv::Ptr{Ptr{Cchar}})::Cint
     return Main.main(args)
 end
 
-let include_result = Base.include(Main, ARGS[1])
+let usermod
+    if isdir(ARGS[1])
+        patharg = ARGS[1]
+        if endswith(patharg, "/")
+            patharg = chop(patharg)
+        end
+        dname = splitdir(patharg)[2]
+        pkgname = Symbol(splitext(dname)[1])
+        Base.eval(Main, :(using $pkgname))
+        Core.@latestworld
+        usermod = getglobal(Main, pkgname)
+    else
+        include_result = Base.include(Main, ARGS[1])
+        usermod = Main
+    end
     Core.@latestworld
     if ARGS[2] == "--output-exe"
+        if usermod !== Main && isdefined(usermod, :main)
+            Base.eval(Main, :(import $pkgname.main))
+        end
+        Core.@latestworld
         have_cmain = false
         if isdefined(Main, :main)
             for m in methods(Main.main)
