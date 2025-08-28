@@ -36,20 +36,24 @@ include("utils.jl")
         JuliaC.bundle_products(bun)
         @test isdir(outdir)
 
-        # Verify the built library actually works by calling jc_add_one via a tiny C runner
+        # Verify the built library exists, accounting for Windows bundle layout
         dlext = Base.BinaryPlatforms.platform_dlext()
-        libpath = joinpath(outdir, "lib", basename(outname) * "." * dlext)
+        libroot = Sys.iswindows() ? "bin" : "lib"
+        libpath = joinpath(outdir, libroot, basename(outname) * "." * dlext)
         @test isfile(libpath)
-        csrc = abspath(joinpath(@__DIR__, "c", "ctest.c"))
-        exe = joinpath(outdir, "ctest_progapi")
-        cc = something(Sys.which("cc"), Sys.which("clang"))
-        cc === nothing && error("C compiler not found")
-        if Sys.islinux()
-            run(`$cc -o $exe $csrc -ldl`)
-        else
-            run(`$cc -o $exe $csrc`)
+        # Run the tiny C runner only on Unix (Windows lacks dlfcn.h and cc by default)
+        if Sys.isunix()
+            csrc = abspath(joinpath(@__DIR__, "c", "ctest.c"))
+            exe = joinpath(outdir, "ctest_progapi")
+            cc = something(Sys.which("cc"), Sys.which("clang"))
+            cc === nothing && error("C compiler not found")
+            if Sys.islinux()
+                run(`$cc -o $exe $csrc -ldl`)
+            else
+                run(`$cc -o $exe $csrc`)
+            end
+            run(`$exe $libpath`)
         end
-        run(`$exe $libpath`)
     end
 
     @testset "Privatization (Unix salted ids)" begin
