@@ -62,7 +62,3 @@ function print_tree_with_sizes(root::AbstractString; io::IO=stdout)
     print_node(abspath(root), "")
     println(io)
 end
-
-
- 
-

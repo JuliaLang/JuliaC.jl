@@ -55,3 +55,47 @@ function install_name_change!(binpath::String, old_id::String, new_id::String)
     run(`install_name_tool -change $(old_id) $(new_id) $(binpath)`)
 end
 
+function _codesign_bundle!(recipe::BundleRecipe)
+    cs = Sys.which("codesign")
+    xattr = Sys.which("xattr")
+    cs === nothing && return
+    libroot = joinpath(recipe.output_dir, recipe.libdir)
+    to_sign = String[]
+    if isdir(libroot)
+        for (r, _, files) in walkdir(libroot)
+            for f in files
+                p = joinpath(r, f)
+                if endswith(p, ".dylib") || endswith(p, ".so") || endswith(p, ".bundle") || endswith(p, ".dylib")
+                    push!(to_sign, p)
+                end
+            end
+        end
+    end
+    # Also sign the primary artifact (exe or dylib)
+    if isfile(recipe.link_recipe.outname)
+        push!(to_sign, recipe.link_recipe.outname)
+    end
+    # Clear quarantine attributes first
+    if xattr !== nothing
+        for p in to_sign
+            run(`$xattr -dr com.apple.quarantine $p`)
+        end
+    end
+    # Narrow signing set: primary artifact and salted libjulia* copies only
+    salted_re = r"^[A-Za-z0-9_-]+_libjulia.*\.(dylib|so|bundle)$"
+    filtered = String[]
+    for p in unique(to_sign)
+        b = basename(p)
+        if p == recipe.link_recipe.outname || occursin(salted_re, b)
+            push!(filtered, p)
+        end
+    end
+    # Perform deep ad-hoc signing
+    for p in filtered
+        # Skip symlinks; signing them is unnecessary and noisy
+        if islink(p)
+            continue
+        end
+        run(`$cs -f -s - --deep --timestamp=none $p`)
+    end
+end
