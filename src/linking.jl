@@ -68,7 +68,7 @@ end
 function link_products(recipe::LinkRecipe)
     link_start = time_ns()
     image_recipe = recipe.image_recipe
-    
+
     # Validate that linking makes sense for this output type
     if image_recipe.output_type == "--output-o" || image_recipe.output_type == "--output-bc"
         error("Cannot link $(image_recipe.output_type) output type. $(image_recipe.output_type) generates object files/archives that don't require linking. Use compile_products() directly instead of link_products().")
@@ -117,7 +117,8 @@ function link_products(recipe::LinkRecipe)
         error("\nCompilation failed: ", e)
     end
     image_recipe.verbose && println("Linking took $((time_ns() - link_start)/1e9) s")
-    if image_recipe.verbose && isfile(recipe.outname)
+    if image_recipe.verbose
+        @assert isfile(recipe.outname)
         out_sz = stat(recipe.outname).size
         println("Linked artifact size: ", Base.format_bytes(out_sz))
     end

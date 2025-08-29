@@ -106,7 +106,8 @@ function compile_products(recipe::ImageRecipe)
     end
     recipe.verbose && println("Compilation took $((time_ns() - compile_time)/1e9) s")
     # Print compiled image size
-    if recipe.verbose && isfile(recipe.img_path)
+    if recipe.verbose
+        @assert isfile(recipe.img_path)
         img_sz = stat(recipe.img_path).size
         println("Image size: ", Base.format_bytes(img_sz))
     end

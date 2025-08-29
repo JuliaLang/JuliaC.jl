@@ -15,28 +15,18 @@ using Patchelf_jll
 
 function privatize_libjulia_linux!(recipe::BundleRecipe)
     try
-        salted_paths = privatize_libjulia_common!(
-            recipe;
-            platform_ext = ".so",
-            install_name_id_func! = nothing,  # Linux uses SONAME instead
-            install_name_change_func! = patchelf_replace_needed!,
-            # Ensure salted libraries carry salted SONAMEs
-            set_soname_func! = patchelf_set_soname!,
-            get_deps_func = get_dependencies_linux,
-            dep_prefix = ""  # On Linux, DT_NEEDED entries are basenames
-        )
-        
+        salted_paths = privatize_libjulia_common!(recipe, LinuxPlatform())
+
         # Version-stamp symbol versions to avoid interposition (Linux-specific)
         if salted_paths !== nothing
             try
                 version_stamp_symbols!(salted_paths, recipe.link_recipe.outname)
             catch e
-                @warn "Failed to patch symbol versions on salted libraries" exception=(e, catch_backtrace())
+                error("Failed to patch symbol versions on salted libraries", e)
             end
         end
     catch e
-        @warn "Failed to privatize libjulia on Linux" exception=(e, catch_backtrace())
-        rethrow()
+        error("Failed to privatize libjulia on Linux", e)
     end
 end
 
@@ -62,4 +52,11 @@ function version_stamp_symbols!(salted_paths::Dict{String,String}, product::Stri
     end
     PatchVersion.patch_version!(product, old_ver, new_ver)
 end
+
+# Platform hooks for Linux
+plat_ext(::LinuxPlatform) = ".so"
+plat_dep_prefix(::LinuxPlatform) = ""
+plat_set_library_id!(::LinuxPlatform, libpath::String, new_id::String) = patchelf_set_soname!(libpath, basename(new_id))
+plat_install_name_change!(::LinuxPlatform, binpath::String, old::String, new::String) = patchelf_replace_needed!(binpath, old, new)
+plat_get_deps(::LinuxPlatform, bin::String) = get_dependencies_linux(bin)
 

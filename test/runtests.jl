@@ -27,7 +27,7 @@ include("utils.jl")
 
     @testset "Programmatic API (trim)" begin
         outdir = mktempdir()
-        outname = joinpath(outdir, "app")
+        outname = joinpath(outdir, "lib")
         link = JuliaC.LinkRecipe(image_recipe=img_lib, outname=outname, rpath=".")
         JuliaC.link_products(link)
         @test isfile(startswith(outname, "/") ? outname * "." * Base.BinaryPlatforms.platform_dlext() : joinpath(dirname(outname), basename(outname) * "." * Base.BinaryPlatforms.platform_dlext())) || isfile(outname)
@@ -73,11 +73,10 @@ include("utils.jl")
             for f in salted
                 if Sys.isapple()
                     out = read(`otool -D $(f)`, String)
-                    @test occursin("@rpath/", out)
                 elseif Sys.islinux()
                     out = read(`$(Patchelf_jll.patchelf()) --print-soname $(f)`, String)
-                    @test occursin("_libjulia", out)
                 end
+                @test occursin("_libjulia", out)
             end
 
             dlext = Base.BinaryPlatforms.platform_dlext()
@@ -158,7 +157,7 @@ end
 
 @testset "CLI app entrypoint (trim)" begin
     outdir = mktempdir()
-    exename = "app_cli"
+    exename = "app"
     cliargs = String[
         "--output-exe", exename,
         "--project", TEST_PROJ,
@@ -203,7 +202,7 @@ end
 
 @testset "Suffix handling" begin
     outdir = mktempdir()
-    
+
     # Compile once
     img = JuliaC.ImageRecipe(
         file = TEST_LIB_SRC,
@@ -219,17 +218,17 @@ end
     # Test 1: No suffix provided (should add platform suffix)
     libout1 = joinpath(outdir, "mylib")
     link1 = JuliaC.LinkRecipe(image_recipe=img, outname=libout1, rpath=".")
-    
+
     # The link_products function should modify the outname to add the correct suffix
     expected_suffix = "." * Base.BinaryPlatforms.platform_dlext()
     expected_name = libout1 * expected_suffix
-    
+
     JuliaC.link_products(link1)
-    
+
     # Verify the outname was corrected
     @test link1.outname == expected_name
     @test isfile(link1.outname)
-    
+
     # Test 2: Wrong suffix provided (should error)
     if Sys.iswindows()
         wrong_ext = ".so"  # Wrong extension for Windows
@@ -237,22 +236,22 @@ end
         wrong_ext = ".exe"  # Wrong extension for Unix
     end
     libout2 = joinpath(outdir, "mylib") * wrong_ext
-    
+
     link2 = JuliaC.LinkRecipe(image_recipe=img, outname=libout2, rpath=".")
-    
+
     # This should error because wrong extension was provided
     @test_throws ErrorException JuliaC.link_products(link2)
-    
+
     # Test 3: Correct suffix provided (should not change)
     libout3 = joinpath(outdir, "mylib") * expected_suffix
-    
+
     link3 = JuliaC.LinkRecipe(image_recipe=img, outname=libout3, rpath=".")
-    
+
     # Store original correct name
     original_correct_name = link3.outname
-    
+
     JuliaC.link_products(link3)
-    
+
     # Verify the correct suffix was not changed
     @test link3.outname == original_correct_name
     @test isfile(link3.outname)
@@ -260,7 +259,7 @@ end
 
 @testset "Object file validation" begin
     outdir = mktempdir()
-    
+
     # Test that linking object files errors
     img = JuliaC.ImageRecipe(
         file = TEST_LIB_SRC,
@@ -272,10 +271,10 @@ end
     )
     JuliaC.compile_products(img)
     @test isfile(img.img_path)
-    
+
     link = JuliaC.LinkRecipe(image_recipe=img, outname=joinpath(outdir, "test.o"))
     @test_throws ErrorException JuliaC.link_products(link)
-    
+
     # Test that bundling object files errors
     bun = JuliaC.BundleRecipe(link_recipe=link, output_dir=outdir)
     @test_throws ErrorException JuliaC.bundle_products(bun)
