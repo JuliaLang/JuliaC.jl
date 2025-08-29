@@ -61,7 +61,7 @@ function privatize_libjulia_common!(recipe::BundleRecipe, platform::PrivatizePla
         plat_set_library_id!(platform, salted_path, plat_dep_prefix(platform) * salted_base)
         salted_paths[p] = salted_path
         salted_filenames[base] = salted_base
-        if occursin("libjulia", base) && !occursin("-internal", base) && !occursin("-codegen", base) && !islink(salted_path)
+        if startswith("libjulia.", base) && !islink(salted_path)
             replace_dep_libs(salted_path, salt)
         end
     end
