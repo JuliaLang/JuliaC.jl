@@ -38,15 +38,23 @@ Base.@kwdef mutable struct BundleRecipe
     link_recipe::LinkRecipe = LinkRecipe()
     output_dir::Union{String, Nothing} = nothing # if nothing, don't bundle
     libdir::String = Sys.iswindows() ? "bin" : "lib"
+    privatize::Bool = false
 end
 
 include("compiling.jl")
 include("linking.jl")
 include("bundling.jl")
+include("patchversion.jl")
+include("privatize_common.jl")
+include("privatize_linux.jl")
+include("privatize_macos.jl")
 
 export ImageRecipe, LinkRecipe, BundleRecipe
 export compile_products, link_products, bundle_products
 
+
+# Helper: validate executable name is a bare name (no directories)
+_is_name_only(s::AbstractString) = (basename(s) == s) && !isabspath(s) && !occursin('\\', s)
 
 # Print CLI usage/help
 function _print_usage(io::IO=stdout)
@@ -63,6 +71,7 @@ function _print_usage(io::IO=stdout)
     println(io, "  --output-bc <path>          Output LLVM bitcode archive")
     println(io, "  --project <path>            App project to instantiate/precompile")
     println(io, "  --bundle <dir>              Bundle libjulia, stdlibs, and artifacts")
+    println(io, "  --privatize                 Privatize bundled libjulia (Unix)")
     println(io, "  --trim[=mode]               Strip IR/metadata (e.g. --trim=safe)")
     println(io, "  --compile-ccallable         Export ccallable entrypoints")
     println(io, "  --experimental              Forwarded to Julia (needed for some --trim)")
@@ -89,11 +98,8 @@ function _parse_cli_args(args::Vector{String})
             image_recipe.output_type = arg
             i == length(args) && error("Output specifier requires an argument")
             name_or_path = args[i+1]
-            if arg == "--output-exe"
-                # Enforce name-only for executables (no paths)
-                if isabspath(name_or_path) || occursin('/', name_or_path) || occursin('\\', name_or_path)
-                    error("--output-exe expects a name (no path). Got: " * name_or_path)
-                end
+            if arg == "--output-exe" && !_is_name_only(name_or_path)
+                error("--output-exe expects a name (no path). Got: " * name_or_path)
             end
             link_recipe.outname = name_or_path
             i += 1
@@ -117,9 +123,9 @@ function _parse_cli_args(args::Vector{String})
             if i < length(args) && (length(args[i+1]) == 0 || args[i+1][1] != '-')
                 bundle_recipe.output_dir = args[i+1]
                 i += 1
-            else
-                error("--bundle requires an argument")
             end
+        elseif arg == "--privatize"
+            bundle_recipe.privatize = true
         elseif arg == "--verbose"
             image_recipe.verbose = true
         else
