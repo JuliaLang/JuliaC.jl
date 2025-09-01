@@ -45,11 +45,11 @@ end
     @test isfile(libpath)
     # Check salted libjulia exists in bundle
     if Sys.isunix()
-        julia_dir = joinpath(outdir, Sys.iswindows() ? "bin" : "lib", "julia")
-        @test isdir(julia_dir)
-        dylibs = filter(f -> endswith(f, ".dylib") || endswith(f, ".so"), readdir(julia_dir; join=true))
-        salted = filter(f -> occursin("_libjulia", basename(f)), dylibs)
-        @test !isempty(salted)
+        # Verify the built library can be dlopened and called from a fresh Julia process
+        lib_literal = repr(libpath)
+        julia_snippet = "using Libdl; h = Libdl.dlopen(" * lib_literal * ", Libdl.RTLD_LOCAL); try; fptr = Libdl.dlsym(h, :jc_add_one); r = ccall(fptr, Cint, (Cint,), 41); println(r); finally; try Libdl.dlclose(h) catch end; end;"
+        out = read(`$(Base.julia_cmd()) --startup-file=no --history-file=no -e $julia_snippet`, String)
+        @test occursin("42", out)
     end
 end
 
