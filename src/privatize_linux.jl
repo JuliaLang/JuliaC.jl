@@ -3,11 +3,11 @@ Linux-specific privatization for libjulia.
 
 High-level steps:
 1) Copy `libjulia*` and `libjulia-internal*` to salted basenames next to originals.
-2) Set SONAME of each salted library to the salted basename (via patchelf).
+2) Set SONAME of each salted library to the salted basename (via patchelf) and DEP_LIBS with ObjectFile.jl
 3) Rewrite DT_NEEDED entries in the built artifact and salted libs to the salted basenames
    (no `@rpath` on Linux; DT_NEEDED entries are plain basenames).
-4) Create minimal unsalted symlinks (short/medium) pointing to the salted full for loader convenience.
-5) Optionally patch symbol versions to avoid interposition.
+4) Recreate symlinks
+5) Patch symbol versions to avoid interposition.
 6) Remove originals.
 """
 
