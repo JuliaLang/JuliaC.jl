@@ -3,10 +3,10 @@ macOS-specific privatization for libjulia.
 
 High-level steps:
 1) Copy `libjulia*` and `libjulia-internal*` to salted basenames next to originals.
-2) Set each salted library's install_name id to `@rpath/<salted>`; no SONAME on macOS.
+2) Set each salted library's install_name id to `@rpath/<salted>`
 3) Rewrite all load commands (install_name) in the built artifact and salted libs
    to point to the salted basenames using `@rpath/`.
-4) Create minimal unsalted symlinks (short/medium) pointing to the salted full for loader convenience.
+4) Recreate symlinks
 5) Remove originals. Codesigning is handled in bundling.
 """
 
