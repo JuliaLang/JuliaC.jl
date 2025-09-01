@@ -6,7 +6,7 @@ function get_rpath(recipe::LinkRecipe)
         elseif Sys.islinux()
             base_token = "-Wl,-rpath,'\$ORIGIN/"
         else
-            @warn "no path set"
+            @warn "get_rpath not implemented for this platform"
             return ""
         end
         # If rpath is a relative subdir (e.g., "lib"), emit @loader_path/lib and @loader_path/lib/julia
@@ -68,34 +68,32 @@ end
 function link_products(recipe::LinkRecipe)
     link_start = time_ns()
     image_recipe = recipe.image_recipe
+
+    # Validate that linking makes sense for this output type
     if image_recipe.output_type == "--output-o" || image_recipe.output_type == "--output-bc"
-        mkpath(dirname(recipe.outname))
-        # Overwrite any previous build artifact to make tests idempotent
-        if isfile(recipe.outname)
-            rm(recipe.outname; force=true)
-        end
-        mv(image_recipe.img_path, recipe.outname; force=true)
-        println("Linking took $((time_ns() - link_start)/1e9) s")
-        try
-            out_sz = stat(recipe.outname).size
-            println("Linked artifact size: ", Base.format_bytes(out_sz))
-        catch
-        end
-        return
+        error("Cannot link $(image_recipe.output_type) output type. $(image_recipe.output_type) generates object files/archives that don't require linking. Use compile_products() directly instead of link_products().")
     end
     if image_recipe.output_type == "--output-lib" || image_recipe.output_type == "--output-sysimage"
         of, ext = splitext(recipe.outname)
         soext = "." * Base.BinaryPlatforms.platform_dlext()
         if ext == ""
+            # User provided no extension - add the platform-specific extension
             recipe.outname = of * soext
+        elseif ext != soext
+            # User provided wrong extension - this is an error
+            error("Invalid file extension '$(ext)' for $(image_recipe.output_type). Expected '$(soext)' for this platform.")
         end
     end
     # Ensure .exe suffix for executables on Windows
-    @static if Sys.iswindows()
+    if Sys.iswindows()
         if image_recipe.output_type == "--output-exe"
             of, ext = splitext(recipe.outname)
-            if lowercase(ext) != ".exe"
+            if ext == ""
+                # User provided no extension - add .exe for Windows executables
                 recipe.outname = of * ".exe"
+            elseif lowercase(ext) != ".exe"
+                # User provided wrong extension - this is an error
+                error("Invalid file extension '$(ext)' for $(image_recipe.output_type). Expected '.exe' for Windows executables.")
             end
         end
     end
@@ -105,22 +103,23 @@ function link_products(recipe::LinkRecipe)
     allflags = Base.shell_split(JuliaConfig.allflags(; framework=false, rpath=false))
     try
         mkpath(dirname(recipe.outname))
-        if image_recipe.output_type == "--output-lib"
-            cmd2 = `$(compiler_cmd) $(allflags) $(rpath_str) -o $(recipe.outname) -shared -Wl,$(Base.Linking.WHOLE_ARCHIVE) $(image_recipe.img_path) $(image_recipe.extra_objects...) -Wl,$(Base.Linking.NO_WHOLE_ARCHIVE)  $(julia_libs)`
-        elseif image_recipe.output_type == "--output-sysimage"
-            cmd2 = `$(compiler_cmd) $(allflags) $(rpath_str) -o $(recipe.outname) -shared -Wl,$(Base.Linking.WHOLE_ARCHIVE) $(image_recipe.img_path) $(image_recipe.extra_objects...) -Wl,$(Base.Linking.NO_WHOLE_ARCHIVE) $(julia_libs)`
-        else
-            cmd2 = `$(compiler_cmd) $(allflags) $(rpath_str) -o $(recipe.outname) -Wl,$(Base.Linking.WHOLE_ARCHIVE) $(image_recipe.img_path) $(image_recipe.extra_objects...) -Wl,$(Base.Linking.NO_WHOLE_ARCHIVE)  $(julia_libs)`
+        is_shared_output = image_recipe.output_type != "--output-exe"
+        # Base command
+        cmd2 = `$(compiler_cmd) $(allflags) $(rpath_str) -o $(recipe.outname)`
+        if is_shared_output
+            cmd2 = `$cmd2 -shared`
         end
+        # Link in the whole archive and user-provided objects, then undo WHOLE_ARCHIVE
+        cmd2 = `$cmd2 -Wl,$(Base.Linking.WHOLE_ARCHIVE) $(image_recipe.img_path) $(image_recipe.extra_objects...) -Wl,$(Base.Linking.NO_WHOLE_ARCHIVE) $(julia_libs)`
         image_recipe.verbose && println("Running: $cmd2")
         run(cmd2)
     catch e
         error("\nCompilation failed: ", e)
     end
-    println("Linking took $((time_ns() - link_start)/1e9) s")
-    try
+    image_recipe.verbose && println("Linking took $((time_ns() - link_start)/1e9) s")
+    if image_recipe.verbose
+        @assert isfile(recipe.outname)
         out_sz = stat(recipe.outname).size
         println("Linked artifact size: ", Base.format_bytes(out_sz))
-    catch
     end
 end

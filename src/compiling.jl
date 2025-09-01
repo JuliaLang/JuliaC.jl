@@ -56,6 +56,10 @@ function compile_products(recipe::ImageRecipe)
     else
         image_arg = "--output-o"
     end
+    # Default: export ccallable entrypoints for shared libraries
+    if recipe.output_type == "--output-lib" && recipe.add_ccallables == false
+        recipe.add_ccallables = true
+    end
     if recipe.cpu_target === nothing
         recipe.cpu_target = get(ENV,"JULIA_CPU_TARGET", nothing)
     end
@@ -69,7 +73,7 @@ function compile_products(recipe::ImageRecipe)
     if !success(pipeline(inst_cmd; stdout, stderr))
         error("Error encountered during instantiate/precompile of app project.")
     end
-    println("Precompilation took $((time_ns() - precompile_time)/1e9) s")
+    recipe.verbose && println("Precompilation took $((time_ns() - precompile_time)/1e9) s")
     # Compile the Julia code
     if recipe.img_path == ""
         tmpdir = mktempdir()
@@ -100,13 +104,12 @@ function compile_products(recipe::ImageRecipe)
         spinner_done[] = true
         wait(spinner_task)
     end
-    println("Compilation took $((time_ns() - compile_time)/1e9) s")
+    recipe.verbose && println("Compilation took $((time_ns() - compile_time)/1e9) s")
     # Print compiled image size
-    try
+    if recipe.verbose
+        @assert isfile(recipe.img_path)
         img_sz = stat(recipe.img_path).size
         println("Image size: ", Base.format_bytes(img_sz))
-    catch
-        # ignore size errors
     end
     # If C shim sources are provided, compile them to objects for linking stage
     if !isempty(recipe.c_sources)
@@ -122,11 +125,6 @@ function compile_products(recipe::ImageRecipe)
             end
         end
         cflags = isempty(user_cflags) ? default_cflags : vcat(default_cflags, user_cflags)
-        new_cflags = ``
-        for flag in cflags
-            new_cflags = `$new_cflags $flag`
-        end
-        @show new_cflags
         for csrc in recipe.c_sources
             obj = replace(csrc, ".c" => ".o")
             try
