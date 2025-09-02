@@ -15,7 +15,7 @@
     @testset "Programmatic API (trim)" begin
         outdir = mktempdir()
         outname = joinpath(outdir, "lib")
-        link = JuliaC.LinkRecipe(image_recipe=img_lib, outname=outname, rpath=".")
+        link = JuliaC.LinkRecipe(image_recipe=img_lib, outname=outname)
         JuliaC.link_products(link)
         @test isfile(startswith(outname, "/") ? outname * "." * Base.BinaryPlatforms.platform_dlext() : joinpath(dirname(outname), basename(outname) * "." * Base.BinaryPlatforms.platform_dlext())) || isfile(outname)
 
@@ -47,7 +47,7 @@
         if Sys.isunix()
             outdir = mktempdir()
             libout = joinpath(outdir, "libprivtest")
-            link = JuliaC.LinkRecipe(image_recipe=img_lib, outname=libout, rpath=".")
+            link = JuliaC.LinkRecipe(image_recipe=img_lib, outname=libout)
             JuliaC.link_products(link)
             bun = JuliaC.BundleRecipe(link_recipe=link, output_dir=outdir, privatize=true)
             JuliaC.bundle_products(bun)
@@ -76,7 +76,7 @@
         if Sys.isunix()
             outdir = mktempdir()
             libout = joinpath(outdir, "libctest")
-            link = JuliaC.LinkRecipe(image_recipe=img_lib, outname=libout, rpath=".")
+            link = JuliaC.LinkRecipe(image_recipe=img_lib, outname=libout)
             JuliaC.link_products(link)
             bun = JuliaC.BundleRecipe(link_recipe=link, output_dir=outdir)
             JuliaC.bundle_products(bun)
@@ -100,7 +100,7 @@
         if Sys.isunix()
             outdir = mktempdir()
             libout = joinpath(outdir, "libjldlopentest")
-            link = JuliaC.LinkRecipe(image_recipe=img_lib, outname=libout, rpath=".")
+            link = JuliaC.LinkRecipe(image_recipe=img_lib, outname=libout)
             JuliaC.link_products(link)
             bun = JuliaC.BundleRecipe(link_recipe=link, output_dir=outdir, privatize=true)
             JuliaC.bundle_products(bun)
@@ -130,7 +130,7 @@ end
         verbose = true,
     )
     JuliaC.compile_products(img)
-    link = JuliaC.LinkRecipe(image_recipe=img, outname=exeout, rpath=Sys.iswindows() ? "bin" : joinpath("..", "lib"))
+    link = JuliaC.LinkRecipe(image_recipe=img, outname=exeout)
     JuliaC.link_products(link)
     bun = JuliaC.BundleRecipe(link_recipe=link, output_dir=outdir)
     JuliaC.bundle_products(bun)
@@ -159,7 +159,7 @@ end
 
     # Test 1: No suffix provided (should add platform suffix)
     libout1 = joinpath(outdir, "mylib")
-    link1 = JuliaC.LinkRecipe(image_recipe=img, outname=libout1, rpath=".")
+    link1 = JuliaC.LinkRecipe(image_recipe=img, outname=libout1)
 
     # The link_products function should modify the outname to add the correct suffix
     expected_suffix = "." * Base.BinaryPlatforms.platform_dlext()
@@ -179,7 +179,7 @@ end
     end
     libout2 = joinpath(outdir, "mylib") * wrong_ext
 
-    link2 = JuliaC.LinkRecipe(image_recipe=img, outname=libout2, rpath=".")
+    link2 = JuliaC.LinkRecipe(image_recipe=img, outname=libout2)
 
     # This should error because wrong extension was provided
     @test_throws ErrorException JuliaC.link_products(link2)
@@ -187,7 +187,7 @@ end
     # Test 3: Correct suffix provided (should not change)
     libout3 = joinpath(outdir, "mylib") * expected_suffix
 
-    link3 = JuliaC.LinkRecipe(image_recipe=img, outname=libout3, rpath=".")
+    link3 = JuliaC.LinkRecipe(image_recipe=img, outname=libout3)
 
     # Store original correct name
     original_correct_name = link3.outname
