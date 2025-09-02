@@ -90,7 +90,7 @@ end
     @test img2.output_type == "--output-lib"
     @test img2.add_ccallables
     @test "--experimental" in img2.julia_args
-    @test img2.enable_trim && img2.trim_mode === nothing
+    @test img2.enable_trim && img2.trim_mode == "safe"
     @test link2.outname == joinpath(outdir, "mylib")
     @test bun2.output_dir == outdir
     if Sys.iswindows()
@@ -100,10 +100,10 @@ end
     end
 
     # Errors: unknown option
-    @test_throws ErrorException JuliaC._parse_cli_args(String["--unknown"]) 
+    @test_throws ErrorException JuliaC._parse_cli_args(String["--unknown"])
 
     # Errors: missing output name
-    @test_throws ErrorException JuliaC._parse_cli_args(String["--output-exe"]) 
+    @test_throws ErrorException JuliaC._parse_cli_args(String["--output-exe"])
 
     # Errors: invalid exe name with path
     @test_throws ErrorException JuliaC._parse_cli_args(String["--output-exe", "bin/app", TEST_SRC])
@@ -112,10 +112,10 @@ end
     @test_throws ErrorException JuliaC._parse_cli_args(String["--output-exe", "app", "--output-lib", "libx", TEST_SRC])
 
     # Errors: project missing argument
-    @test_throws ErrorException JuliaC._parse_cli_args(String["--project"]) 
+    @test_throws ErrorException JuliaC._parse_cli_args(String["--project"])
 
     # Errors: missing file
-    @test_throws ErrorException JuliaC._parse_cli_args(String["--output-exe", "app"]) 
+    @test_throws ErrorException JuliaC._parse_cli_args(String["--output-exe", "app"])
 end
 
 @testset "CLI help/usage" begin
