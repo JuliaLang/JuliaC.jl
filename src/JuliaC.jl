@@ -121,9 +121,9 @@ function _parse_cli_args(args::Vector{String})
             else
                 i == length(args) && error("--project requires an argument")
                 proj = args[i+1]
+                i += 1
             end
             image_recipe.project = proj
-            i += 1
         elseif arg == "--bundle"
             bundle_specified = true
             if i < length(args) && (length(args[i+1]) == 0 || args[i+1][1] != '-')

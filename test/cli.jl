@@ -79,7 +79,7 @@ end
     outdir = mktempdir()
     args2 = String[
         "--output-lib", joinpath(outdir, "mylib"),
-        "--project", TEST_LIB_PROJ,
+        "--project=$TEST_LIB_PROJ", # Test both --project= and --project <arg> forms
         "--compile-ccallable",
         "--experimental",
         "--trim",
@@ -87,6 +87,7 @@ end
         "--bundle", outdir,
     ]
     img2, link2, bun2 = JuliaC._parse_cli_args(args2)
+    @show img2.add_ccallables
     @test img2.output_type == "--output-lib"
     @test img2.add_ccallables
     @test "--experimental" in img2.julia_args
