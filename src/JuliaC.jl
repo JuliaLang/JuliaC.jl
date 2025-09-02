@@ -115,10 +115,15 @@ function _parse_cli_args(args::Vector{String})
             push!(image_recipe.julia_args, arg)
         elseif arg == "--compile-ccallable"
             image_recipe.add_ccallables = true
-        elseif arg == "--project"
-            i == length(args) && error("App project directory requires an argument")
-            image_recipe.project = args[i+1]
-            i += 1
+        elseif startswith(arg, "--project")
+            if occursin('=', arg)
+                proj = split(arg, '='; limit=2)[2]
+            else
+                i == length(args) && error("--project requires an argument")
+                proj = args[i+1]
+                i += 1
+            end
+            image_recipe.project = proj
         elseif arg == "--bundle"
             bundle_specified = true
             if i < length(args) && (length(args[i+1]) == 0 || args[i+1][1] != '-')
