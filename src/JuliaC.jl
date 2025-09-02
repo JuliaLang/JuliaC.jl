@@ -103,13 +103,14 @@ function _parse_cli_args(args::Vector{String})
             end
             link_recipe.outname = name_or_path
             i += 1
-        elseif startswith(arg, "--trim")
+        elseif startswith(arg, "--trim=")
             # Enable trim and parse mode for compile-time handling
             image_recipe.enable_trim = arg != "--trim=no"
-            if occursin('=', arg)
-                mode = split(arg, '='; limit=2)[2]
-                image_recipe.trim_mode = mode
-            end
+            mode = split(arg, '='; limit=2)[2]
+            image_recipe.trim_mode = mode
+        elseif arg == "--trim"
+            image_recipe.enable_trim = true
+            image_recipe.trim_mode = "safe"
         elseif arg == "--experimental"
             push!(image_recipe.julia_args, arg)
         elseif arg == "--compile-ccallable"
