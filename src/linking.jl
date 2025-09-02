@@ -1,23 +1,21 @@
 function get_rpath(recipe::LinkRecipe)
-    if recipe.rpath !== nothing
-        local base_token
-        if Sys.isapple()
-            base_token = "-Wl,-rpath,'@loader_path/"
-        elseif Sys.islinux()
-            base_token = "-Wl,-rpath,'\$ORIGIN/"
-        else
-            @warn "get_rpath not implemented for this platform"
-            return ""
-        end
-        # If rpath is a relative subdir (e.g., "lib"), emit @loader_path/lib and @loader_path/lib/julia
-        priv_path = joinpath(recipe.rpath, "julia")
-        base_path = recipe.rpath
-        flag1 = base_token * base_path * "'"
-        flag2 = base_token * priv_path * "'"
-        return string(flag1, " ", flag2)
-    else
-        return JuliaConfig.ldrpath()
+    if recipe.rpath === nothing
+        recipe.rpath = Sys.iswindows() ? "" : joinpath("..", "lib") # Default rpaths
     end
+    if Sys.isapple()
+        base_token = "-Wl,-rpath,'@loader_path/"
+    elseif Sys.islinux()
+        base_token = "-Wl,-rpath,'\$ORIGIN/"
+    else
+        @warn "get_rpath not implemented for this platform"
+        return ""
+    end
+    # If rpath is a relative subdir (e.g., "lib"), emit @loader_path/lib and @loader_path/lib/julia
+    priv_path = joinpath(recipe.rpath, "julia")
+    base_path = recipe.rpath
+    flag1 = base_token * base_path * "'"
+    flag2 = base_token * priv_path * "'"
+    return string(flag1, " ", flag2)
 end
 
 function get_compiler_cmd(; cplusplus::Bool=false)
