@@ -222,3 +222,36 @@ end
     @test_throws ErrorException JuliaC.bundle_products(bun)
 end
 
+@testset "Project as File" begin
+    outdir = mktempdir()
+    exeout = joinpath(outdir, "prog_exe_projfile")
+
+    # Passing the project as a file and a project should error
+    img_bad = JuliaC.ImageRecipe(
+        file = TEST_PROJ,
+        output_type = "--output-exe",
+        project = TEST_PROJ,  # Invalid, should be a directory
+        enable_trim = true,
+        trim_mode = "safe",
+        verbose = true,
+    )
+    @test_throws ErrorException JuliaC.compile_products(img_bad)
+    img = JuliaC.ImageRecipe(
+        file = TEST_PROJ,
+        output_type = "--output-exe",
+        enable_trim = true,
+        trim_mode = "safe",
+        verbose = true,
+    )
+    JuliaC.compile_products(img)
+    link = JuliaC.LinkRecipe(image_recipe=img, outname=exeout)
+    JuliaC.link_products(link)
+    bun = JuliaC.BundleRecipe(link_recipe=link, output_dir=outdir)
+    JuliaC.bundle_products(bun)
+    actual_exe = Sys.iswindows() ? joinpath(outdir, "bin", basename(exeout) * ".exe") : joinpath(outdir, "bin", basename(exeout))
+    @test isfile(actual_exe)
+    output = read(`$actual_exe`, String)
+    @test occursin("Fast compilation test!", output)
+    # Print tree for debugging/inspection
+    print_tree_with_sizes(outdir)
+end

@@ -33,12 +33,12 @@ Compile an executable and produce a self-contained bundle in `build/`:
 ```bash
 juliac \
   --output-exe app_test_exe \
-  --project test/app_project \
+  --project test/AppProject\
   --bundle build \
   --trim=safe \
   --experimental \
   --verbose \
-  test/app_project/src/test.jl
+  test/AppProject/src/test.jl
 ```
 
 Notes:
