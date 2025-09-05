@@ -65,6 +65,12 @@ function compile_products(recipe::ImageRecipe)
     end
     julia_cmd = `$(Base.julia_cmd(;cpu_target=recipe.cpu_target)) --startup-file=no --history-file=no`
     # Ensure the app project is instantiated and precompiled
+    if isdir(recipe.file)
+        if recipe.project != ""
+            error("Cannot separately specify a project when compiling a package")
+        end
+        recipe.project = recipe.file
+    end
     project_arg = recipe.project == "" ? Base.active_project() : recipe.project
     env_overrides = Dict{String,Any}("JULIA_LOAD_PATH"=>nothing, "JULIA_DEPOT_PATH"=>nothing)
     inst_cmd = addenv(`$(Base.julia_cmd()) --project=$project_arg -e "using Pkg; Pkg.instantiate(); Pkg.precompile()"`, env_overrides...)
