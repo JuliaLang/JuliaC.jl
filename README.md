@@ -15,9 +15,10 @@ Built on top of `PackageCompiler.jl`.
 - A working C compiler (`clang`/`gcc` on macOS/Linux; MSYS2 mingw on Windows)
 
 ### Installation
+Install JuliaC as a [Julia app](https://pkgdocs.julialang.org/v1/apps/):
 
 ```julia
-pkg> add JuliaC
+pkg> app add JuliaC
 ```
 
 Optional: enable `Pkg` app shims on your shell PATH so you can run `juliac` directly:
@@ -28,7 +29,8 @@ echo 'export PATH="$HOME/.julia/bin:$PATH"' >> ~/.bashrc    # adapt for your she
 
 ### Quick start (CLI)
 
-Compile an executable and produce a self-contained bundle in `build/`:
+Given an app in `test/AppProject` (see the files in this repository),
+compile an executable and produce a self-contained bundle in `build/`:
 
 ```bash
 juliac \
