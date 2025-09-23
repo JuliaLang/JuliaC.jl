@@ -77,8 +77,6 @@ function compile_products(recipe::ImageRecipe)
         recipe.project = recipe.file
     end
 
-
-
     project_arg = recipe.project == "" ? Base.active_project() : recipe.project
     env_overrides = Dict{String,Any}("JULIA_LOAD_PATH"=>nothing, "JULIA_DEPOT_PATH"=>nothing)
     inst_cmd = addenv(`$(Base.julia_cmd(cpu_target=precompile_cpu_target)) --project=$project_arg -e "using Pkg; Pkg.instantiate(); Pkg.precompile()"`, env_overrides...)
