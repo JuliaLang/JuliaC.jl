@@ -9,6 +9,7 @@ end
 (f::Base.RedirectStdStream)(io::Core.CoreSTDOUT) = Base._redirect_io_global(io, f.unix_fd)
 
 @eval Base begin
+    show(io::IO, ::Colon) = print(io, "Colon()")
     depwarn(msg, funcsym; force::Bool=false) = nothing
     _assert_tostring(msg) = ""
     reinit_stdio() = nothing
