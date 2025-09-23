@@ -65,7 +65,7 @@ function compile_products(recipe::ImageRecipe)
     end
     julia_cmd = `$(Base.julia_cmd(;cpu_target=recipe.cpu_target)) --startup-file=no --history-file=no`
     if recipe.cpu_target !== nothing
-        precompile_cpu_target = first(split(recipe.cpu_target, [';',',']))
+        precompile_cpu_target = String(first(split(recipe.cpu_target, [';',','])))
     else
         precompile_cpu_target = nothing
     end
