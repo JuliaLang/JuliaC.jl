@@ -64,6 +64,11 @@ function compile_products(recipe::ImageRecipe)
         recipe.cpu_target = get(ENV,"JULIA_CPU_TARGET", nothing)
     end
     julia_cmd = `$(Base.julia_cmd(;cpu_target=recipe.cpu_target)) --startup-file=no --history-file=no`
+    if recipe.cpu_target !== nothing
+        precompile_cpu_target = first(split(recipe.cpu_target, [';',',']))
+    else
+        precompile_cpu_target = nothing
+    end
     # Ensure the app project is instantiated and precompiled
     if isdir(recipe.file)
         if recipe.project != ""
@@ -71,9 +76,12 @@ function compile_products(recipe::ImageRecipe)
         end
         recipe.project = recipe.file
     end
+
+
+
     project_arg = recipe.project == "" ? Base.active_project() : recipe.project
     env_overrides = Dict{String,Any}("JULIA_LOAD_PATH"=>nothing, "JULIA_DEPOT_PATH"=>nothing)
-    inst_cmd = addenv(`$(Base.julia_cmd()) --project=$project_arg -e "using Pkg; Pkg.instantiate(); Pkg.precompile()"`, env_overrides...)
+    inst_cmd = addenv(`$(Base.julia_cmd(cpu_target=precompile_cpu_target)) --project=$project_arg -e "using Pkg; Pkg.instantiate(); Pkg.precompile()"`, env_overrides...)
     recipe.verbose && println("Running: $inst_cmd")
     precompile_time = time_ns()
     if !success(pipeline(inst_cmd; stdout, stderr))
