@@ -1,6 +1,6 @@
 module JuliaC
 
-@static if VERSION > v"1.12.0-rc2"
+@static if VERSION >= v"1.12.0-rc1"
 using Pkg
 using PackageCompiler
 using LazyArtifacts
