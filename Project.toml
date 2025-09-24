@@ -20,6 +20,9 @@ Mmap = "1"
 PackageCompiler = "2"
 Pkg = "1"
 julia = "1.10"
+ObjectFile = "0.5"
+StructIO = "0.3"
+Patchelf_jll = "0.18"
 
 [apps.juliac]
 

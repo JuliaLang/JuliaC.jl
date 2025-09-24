@@ -1,12 +1,11 @@
 module JuliaC
 
+@static if VERSION >= v"1.12.0-rc1"
 using Pkg
 using PackageCompiler
 using LazyArtifacts
 
-module JuliaConfig
-    include(joinpath(Sys.BINDIR, Base.DATAROOTDIR, "julia", "julia-config.jl"))
-end
+include("JuliaConfig.jl")
 
 Base.@kwdef mutable struct ImageRecipe
     # codegen options
@@ -177,5 +176,6 @@ function (@main)(ARGS)
 end
 
 precompile(main, (Vector{String},))
+end
 
 end # module JuliaC
