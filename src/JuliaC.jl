@@ -1,5 +1,6 @@
 module JuliaC
 
+@static if VERSION > v"1.12.0-rc2"
 using Pkg
 using PackageCompiler
 using LazyArtifacts
@@ -177,5 +178,6 @@ function (@main)(ARGS)
 end
 
 precompile(main, (Vector{String},))
+end
 
 end # module JuliaC
