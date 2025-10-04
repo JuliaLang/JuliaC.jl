@@ -52,12 +52,12 @@ Notes:
 ```bash
 julia --project -e "using JuliaC; JuliaC.main(ARGS)" -- \
   --output-exe app_test_exe \
-  --project test/app_project \
+  --project test/AppProject \
   --bundle build \
   --trim=safe \
   --experimental \
   --verbose \
-  test/app_project/src/test.jl
+  test/AppProject/src/test.jl
 ```
 
 ### CLI reference
@@ -79,8 +79,8 @@ using JuliaC
 
 img = ImageRecipe(
     output_type = "--output-exe",
-    file        = "test/app_project/src/test.jl",
-    project     = "test/app_project",
+    file        = "test/AppProject/src/test.jl",
+    project     = "test/AppProject",
     enable_trim = true,
     trim_mode   = "safe",
     add_ccallables = false,
