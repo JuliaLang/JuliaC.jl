@@ -101,7 +101,11 @@ function compile_products(recipe::ImageRecipe)
     for a in recipe.julia_args
         cmd = `$cmd $a`
     end
-    cmd = `$cmd $(joinpath(@__DIR__, "scripts", "juliac-buildscript.jl")) $(abspath(recipe.file)) $(recipe.output_type) $(string(recipe.add_ccallables))`
+    cmd = `$cmd $(joinpath(@__DIR__, "scripts", "juliac-buildscript.jl")) --source $(abspath(recipe.file)) $(recipe.output_type)`
+    if recipe.add_ccallables
+        cmd = `$cmd --compile-ccallable`
+    end
+    
     # Threading
     cmd = addenv(cmd, "OPENBLAS_NUM_THREADS" => 1, "JULIA_NUM_THREADS" => 1, env_overrides...)
     recipe.verbose && println("Running: $cmd")

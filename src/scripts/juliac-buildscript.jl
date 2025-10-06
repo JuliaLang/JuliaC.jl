@@ -26,8 +26,7 @@ end
 #   --source <path>              : Required. Source file or package directory to load.
 #   --output-<type>              : One of: exe | lib | sysimage | o | bc. Controls entrypoint setup.
 #   --compile-ccallable          : Export ccallable entrypoints (for shared libraries).
-#   --depot-path <path>          : Optional. After sanitizing DEPOT_PATH, set to this value.
-source_path, output_type, add_ccallables, depot_path = let
+source_path, output_type, add_ccallables = let
     source_path = ""
     output_type = ""
     add_ccallables = false
