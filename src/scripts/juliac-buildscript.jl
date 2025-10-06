@@ -43,6 +43,7 @@ source_path, output_type, add_ccallables, depot_path = let
             output_type = arg
         elseif arg == "--compile-ccallable" || arg == "--add-ccallables"
             add_ccallables = true
+        end
     end
     source_path == "" && error("Missing required --source <path>")
     (source_path, output_type, add_ccallables)
