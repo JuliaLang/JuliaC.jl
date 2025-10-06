@@ -115,9 +115,7 @@ end
         throw(DimensionMismatch("all inputs to eachindex must have the same axes"))
     end
 end
-@eval Base.Sys begin
-    __init_build() = nothing
-end
+
 # Used for LinearAlgebre ldiv with SVD
 for s in [:searchsortedfirst, :searchsortedlast, :searchsorted]
     @eval Base.Sort begin
