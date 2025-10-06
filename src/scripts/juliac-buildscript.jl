@@ -20,6 +20,34 @@ if Base.get_bool_env("JULIA_USE_FLISP_PARSER", false) === false
     Base.JuliaSyntax.enable_in_core!()
 end
 
+# Parse named arguments (avoid soft scope issues by using a `let` block)
+#
+# Recognized flags:
+#   --source <path>              : Required. Source file or package directory to load.
+#   --output-<type>              : One of: exe | lib | sysimage | o | bc. Controls entrypoint setup.
+#   --compile-ccallable          : Export ccallable entrypoints (for shared libraries).
+#   --depot-path <path>          : Optional. After sanitizing DEPOT_PATH, set to this value.
+source_path, output_type, add_ccallables, depot_path = let
+    source_path = ""
+    output_type = ""
+    add_ccallables = false
+    it = Iterators.Stateful(ARGS)
+    for arg in it
+        if startswith(arg, "--source=")
+            source_path = split(arg, "=", limit=2)[2]
+        elseif arg == "--source"
+            nextarg = popfirst!(it)
+            nextarg === nothing && error("Missing value for --source")
+            source_path = nextarg
+        elseif arg == "--output-exe" || arg == "--output-lib" || arg == "--output-sysimage" || arg == "--output-o" || arg == "--output-bc"
+            output_type = arg
+        elseif arg == "--compile-ccallable" || arg == "--add-ccallables"
+            add_ccallables = true
+    end
+    source_path == "" && error("Missing required --source <path>")
+    (source_path, output_type, add_ccallables)
+end
+
 # Load user code
 
 import Base.Experimental.entrypoint
@@ -34,8 +62,8 @@ function _main(argc::Cint, argv::Ptr{Ptr{Cchar}})::Cint
 end
 
 let usermod
-    if isdir(ARGS[1])
-        patharg = ARGS[1]
+    if isdir(source_path)
+        patharg = source_path
         if endswith(patharg, "/")
             patharg = chop(patharg)
         end
@@ -45,11 +73,11 @@ let usermod
         Core.@latestworld
         usermod = getglobal(Main, pkgname)
     else
-        include_result = Base.include(Main, ARGS[1])
+        include_result = Base.include(Main, source_path)
         usermod = Main
     end
     Core.@latestworld
-    if ARGS[2] == "--output-exe"
+    if output_type == "--output-exe"
         if usermod !== Main && isdefined(usermod, :main)
             Base.eval(Main, :(import $pkgname.main))
         end
@@ -89,7 +117,7 @@ let usermod
     end
     entrypoint(Base.trypoptask, (Base.StickyWorkqueue,))
     entrypoint(Base.checktaskempty, ())
-    if ARGS[3] == "true"
+    if add_ccallables
         if isdefined(Base.Compiler, :add_ccallable_entrypoints!)
             Base.Compiler.add_ccallable_entrypoints!()
         else
