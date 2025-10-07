@@ -15,7 +15,7 @@ Built on top of `PackageCompiler.jl`.
 - A working C compiler (`clang`/`gcc` on macOS/Linux; MSYS2 mingw on Windows)
 
 ### Installation
-Install JuliaC as a [Julia app](https://pkgdocs.julialang.org/v1/apps/):
+Install JuliaC as a [Julia app](https://pkgdocs.julialang.org/dev/apps/):
 
 ```julia
 pkg> app add JuliaC
