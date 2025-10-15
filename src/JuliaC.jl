@@ -21,6 +21,7 @@ Base.@kwdef mutable struct ImageRecipe
     img_path::String = ""
     # compile-time configuration
     verbose::Bool = false
+    use_loaded_libs::Bool = false
     # C shim sources to compile and link into the final artifact
     c_sources::Vector{String} = String[]
     cflags::Vector{String} = String[]

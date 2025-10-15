@@ -105,6 +105,9 @@ function compile_products(recipe::ImageRecipe)
     if recipe.add_ccallables
         cmd = `$cmd --compile-ccallable`
     end
+    if recipe.use_loaded_libs
+        cmd = `$cmd --use-loaded-libs`
+    end
     
     # Threading
     cmd = addenv(cmd, "OPENBLAS_NUM_THREADS" => 1, "JULIA_NUM_THREADS" => 1, env_overrides...)
