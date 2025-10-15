@@ -7,7 +7,7 @@ let
 
     SparseArrays = find_loaded_root_module(Base.PkgId(
         Base.UUID("2f01184e-e22b-5df5-ae63-d93ebab69eaf"), "SparseArrays"))
-    if SparseArrays !== nothing
+    if SparseArrays !== nothing && Base.USE_GPL_LIBS
         @eval SparseArrays.CHOLMOD begin
             function __init__()
                 ccall((:SuiteSparse_config_malloc_func_set, :libsuitesparseconfig),
