@@ -26,10 +26,12 @@ end
 #   --source <path>              : Required. Source file or package directory to load.
 #   --output-<type>              : One of: exe | lib | sysimage | o | bc. Controls entrypoint setup.
 #   --compile-ccallable          : Export ccallable entrypoints (for shared libraries).
-source_path, output_type, add_ccallables = let
+#   --use-loaded-libs            : Enable Libdl.dlopen override to reuse existing loads.
+source_path, output_type, add_ccallables, use_loaded_libs = let
     source_path = ""
     output_type = ""
     add_ccallables = false
+    use_loaded_libs = false
     it = Iterators.Stateful(ARGS)
     for arg in it
         if startswith(arg, "--source=")
@@ -42,10 +44,12 @@ source_path, output_type, add_ccallables = let
             output_type = arg
         elseif arg == "--compile-ccallable" || arg == "--add-ccallables"
             add_ccallables = true
+        elseif arg == "--use-loaded-libs"
+            use_loaded_libs = true
         end
     end
     source_path == "" && error("Missing required --source <path>")
-    (source_path, output_type, add_ccallables)
+    (source_path, output_type, add_ccallables, use_loaded_libs)
 end
 
 # Load user code
@@ -133,6 +137,11 @@ Core.Compiler._verify_trim_world_age[] = Base.get_world_counter()
 if Base.JLOptions().trim != 0
     include(joinpath(@__DIR__, "juliac-trim-base.jl"))
     include(joinpath(@__DIR__, "juliac-trim-stdlib.jl"))
+end
+
+# Optionally install Libdl overrides to reuse existing loaded libs on absolute dlopen
+if use_loaded_libs
+    include(joinpath(@__DIR__, "juliac-libdl-overrides.jl"))
 end
 
 empty!(Core.ARGS)
