@@ -66,7 +66,7 @@ end
     img, link, bun = JuliaC._parse_cli_args(args)
     @test img.output_type == "--output-exe"
     @test img.project == TEST_PROJ
-    @test img.enable_trim && img.trim_mode == "safe"
+    @test img.trim_mode == "safe"
     @test link.outname == "app"
     @test bun.output_dir == abspath(dirname(link.outname))
     if Sys.iswindows()
@@ -91,7 +91,7 @@ end
     @test img2.output_type == "--output-lib"
     @test img2.add_ccallables
     @test "--experimental" in img2.julia_args
-    @test img2.enable_trim && img2.trim_mode == "safe"
+    @test img2.trim_mode == "safe"
     @test link2.outname == joinpath(outdir, "mylib")
     @test bun2.output_dir == outdir
     if Sys.iswindows()

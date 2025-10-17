@@ -81,7 +81,6 @@ img = ImageRecipe(
     output_type = "--output-exe",
     file        = "test/AppProject/src/test.jl",
     project     = "test/AppProject",
-    enable_trim = true,
     trim_mode   = "safe",
     add_ccallables = false,
     verbose     = true,

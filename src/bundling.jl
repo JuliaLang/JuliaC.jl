@@ -93,7 +93,7 @@ function remove_unnecessary_libraries(recipe::BundleRecipe)
     julia_dir = joinpath(bundle_root, recipe.libdir)
     !isdir(julia_dir) && return
     # If trim is enable remove codegen
-    if recipe.link_recipe.image_recipe.enable_trim
+    if is_trim_enabled(recipe.link_recipe.image_recipe)
         for (root, _, files) in walkdir(julia_dir)
             for f in files
                 if occursin("libLLVM", f) || occursin("libjulia-codegen", f)

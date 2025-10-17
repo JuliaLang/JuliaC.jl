@@ -5,7 +5,6 @@
         output_type = "--output-lib",
         project = TEST_LIB_PROJ,
         add_ccallables = true,
-        enable_trim = true,
         trim_mode = "safe",
         verbose = true,
     )
@@ -125,7 +124,6 @@ end
         file = TEST_SRC,
         output_type = "--output-exe",
         project = TEST_PROJ,
-        enable_trim = true,
         trim_mode = "safe",
         verbose = true,
     )
@@ -151,7 +149,6 @@ end
         output_type = "--output-lib",
         project = TEST_LIB_PROJ,
         add_ccallables = true,
-        enable_trim = true,
         trim_mode = "safe",
         verbose = false,
     )
@@ -207,7 +204,6 @@ end
         file = TEST_LIB_SRC,
         output_type = "--output-o",
         project = TEST_LIB_PROJ,
-        enable_trim = true,
         trim_mode = "safe",
         verbose = false,
     )
@@ -231,7 +227,6 @@ end
         file = TEST_PROJ,
         output_type = "--output-exe",
         project = TEST_PROJ,  # Invalid, should be a directory
-        enable_trim = true,
         trim_mode = "safe",
         verbose = true,
     )
@@ -239,7 +234,6 @@ end
     img = JuliaC.ImageRecipe(
         file = TEST_PROJ,
         output_type = "--output-exe",
-        enable_trim = true,
         trim_mode = "safe",
         verbose = true,
     )

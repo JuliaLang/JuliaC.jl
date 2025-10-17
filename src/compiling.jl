@@ -40,7 +40,7 @@ end
 function compile_products(recipe::ImageRecipe)
     # Only strip IR / metadata if not `--trim=no`
     strip_args = String[]
-    if recipe.enable_trim
+    if is_trim_enabled(recipe)
         push!(strip_args, "--strip-ir")
         push!(strip_args, "--strip-metadata")
         # Detect trim support on 1.12 prereleases as well
@@ -108,7 +108,7 @@ function compile_products(recipe::ImageRecipe)
     if recipe.use_loaded_libs
         cmd = `$cmd --use-loaded-libs`
     end
-    
+
     # Threading
     cmd = addenv(cmd, "OPENBLAS_NUM_THREADS" => 1, "JULIA_NUM_THREADS" => 1, env_overrides...)
     recipe.verbose && println("Running: $cmd")
