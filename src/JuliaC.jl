@@ -11,7 +11,6 @@ Base.@kwdef mutable struct ImageRecipe
     # codegen options
     cpu_target::Union{String, Nothing} = nothing
     output_type::String = ""
-    enable_trim::Bool = false
     trim_mode::Union{String, Nothing} = nothing
     add_ccallables::Bool = false
     # build options
@@ -56,6 +55,7 @@ export compile_products, link_products, bundle_products
 # Helper: validate executable name is a bare name (no directories)
 _is_name_only(s::AbstractString) = (basename(s) == s) && !isabspath(s) && !occursin('\\', s)
 
+is_trim_enabled(recipe::ImageRecipe) = recipe.trim_mode !== nothing && recipe.trim_mode != "no"
 # Print CLI usage/help
 function _print_usage(io::IO=stdout)
     println(io, "juliac - compile Julia code into an executable, library, sysimage, object or bitcode")
@@ -105,11 +105,9 @@ function _parse_cli_args(args::Vector{String})
             i += 1
         elseif startswith(arg, "--trim=")
             # Enable trim and parse mode for compile-time handling
-            image_recipe.enable_trim = arg != "--trim=no"
             mode = split(arg, '='; limit=2)[2]
             image_recipe.trim_mode = mode
         elseif arg == "--trim"
-            image_recipe.enable_trim = true
             image_recipe.trim_mode = "safe"
         elseif arg == "--experimental"
             push!(image_recipe.julia_args, arg)
