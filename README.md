@@ -115,7 +115,7 @@ This produces a relocatable directory you can distribute.
 
 ### Trimming
 
-On Julia 1.12+, JuliaC can exclude code proven to not be reachable from entry points, reducing
+On Julia 1.12+, JuliaC can exclude code proven not to be reachable from entry points, reducing
 binary size:
 
 ```bash
