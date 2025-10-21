@@ -108,6 +108,9 @@ function compile_products(recipe::ImageRecipe)
     if recipe.use_loaded_libs
         cmd = `$cmd --use-loaded-libs`
     end
+    if recipe.export_abi !== nothing
+        cmd = `$cmd --export-abi $(recipe.export_abi)`
+    end
 
     # Threading
     cmd = addenv(cmd, env_overrides...)

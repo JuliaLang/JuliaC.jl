@@ -28,6 +28,7 @@ Base.@kwdef mutable struct ImageRecipe
     c_sources::Vector{String} = String[]
     cflags::Vector{String} = String[]
     extra_objects::Vector{String} = String[]
+    export_abi::Union{String, Nothing} = nothing
 end
 
 Base.@kwdef mutable struct LinkRecipe
@@ -77,6 +78,7 @@ function _print_usage(io::IO=stdout)
     println(io, "  --privatize                 Privatize bundled libjulia (Unix)")
     println(io, "  --trim[=mode]               Strip IR/metadata (e.g. --trim=safe)")
     println(io, "  --compile-ccallable         Export ccallable entrypoints")
+    println(io, "  --export-abi <file>         Emit type / function information for the ABI (in JSON format)")
     println(io, "  --experimental              Forwarded to Julia (needed for --trim)")
     println(io, "  --verbose                   Print commands and timings")
     println(io, "  --version                   Print juliac and julia version")
@@ -121,6 +123,10 @@ function _parse_cli_args(args::Vector{String})
             push!(image_recipe.julia_args, arg)
         elseif arg == "--compile-ccallable"
             image_recipe.add_ccallables = true
+        elseif arg == "--export-abi"
+            i == length(args) && error("--export-abi requires an argument")
+            image_recipe.export_abi = args[i+1]
+            i += 1
         elseif startswith(arg, "--project")
             if occursin('=', arg)
                 proj = split(arg, '='; limit=2)[2]
