@@ -27,11 +27,13 @@ end
 #   --output-<type>              : One of: exe | lib | sysimage | o | bc. Controls entrypoint setup.
 #   --compile-ccallable          : Export ccallable entrypoints (for shared libraries).
 #   --use-loaded-libs            : Enable Libdl.dlopen override to reuse existing loads.
-source_path, output_type, add_ccallables, use_loaded_libs = let
+#   --scripts-dir <path>         : Directory containing build helper scripts.
+source_path, output_type, add_ccallables, use_loaded_libs, scripts_dir = let
     source_path = ""
     output_type = ""
     add_ccallables = false
     use_loaded_libs = false
+    scripts_dir = abspath(dirname(PROGRAM_FILE))
     it = Iterators.Stateful(ARGS)
     for arg in it
         if startswith(arg, "--source=")
@@ -40,6 +42,12 @@ source_path, output_type, add_ccallables, use_loaded_libs = let
             nextarg = popfirst!(it)
             nextarg === nothing && error("Missing value for --source")
             source_path = nextarg
+        elseif startswith(arg, "--scripts-dir=")
+            scripts_dir = split(arg, "=", limit=2)[2]
+        elseif arg == "--scripts-dir"
+            nextarg = popfirst!(it)
+            nextarg === nothing && error("Missing value for --scripts-dir")
+            scripts_dir = nextarg
         elseif arg == "--output-exe" || arg == "--output-lib" || arg == "--output-sysimage" || arg == "--output-o" || arg == "--output-bc"
             output_type = arg
         elseif arg == "--compile-ccallable" || arg == "--add-ccallables"
@@ -49,7 +57,7 @@ source_path, output_type, add_ccallables, use_loaded_libs = let
         end
     end
     source_path == "" && error("Missing required --source <path>")
-    (source_path, output_type, add_ccallables, use_loaded_libs)
+    (source_path, output_type, add_ccallables, use_loaded_libs, scripts_dir)
 end
 
 # Load user code
@@ -135,13 +143,13 @@ end
 Core.Compiler._verify_trim_world_age[] = Base.get_world_counter()
 
 if Base.JLOptions().trim != 0
-    include(joinpath(@__DIR__, "juliac-trim-base.jl"))
-    include(joinpath(@__DIR__, "juliac-trim-stdlib.jl"))
+    include(joinpath(scripts_dir, "juliac-trim-base.jl"))
+    include(joinpath(scripts_dir, "juliac-trim-stdlib.jl"))
 end
 
 # Optionally install Libdl overrides to reuse existing loaded libs on absolute dlopen
 if use_loaded_libs
-    include(joinpath(@__DIR__, "juliac-libdl-overrides.jl"))
+    include(joinpath(scripts_dir, "juliac-libdl-overrides.jl"))
 end
 
 empty!(Core.ARGS)

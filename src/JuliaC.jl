@@ -1,11 +1,14 @@
 module JuliaC
 
-@static if VERSION >= v"1.12.0-rc1"
 using Pkg
 using PackageCompiler
 using LazyArtifacts
+using RelocatableFolders
+
+@static if VERSION >= v"1.12.0-rc1"
 
 include("JuliaConfig.jl")
+const SCRIPTS_DIR = @path joinpath(@__DIR__, "scripts")
 
 Base.@kwdef mutable struct ImageRecipe
     # codegen options
