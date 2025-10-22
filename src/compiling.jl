@@ -78,8 +78,7 @@ function compile_products(recipe::ImageRecipe)
     end
 
     project_arg = recipe.project == "" ? Base.active_project() : recipe.project
-    env_overrides = Dict{String,Any}("JULIA_LOAD_PATH"=>nothing, "JULIA_DEPOT_PATH"=>nothing)
-    inst_cmd = addenv(`$(Base.julia_cmd(cpu_target=precompile_cpu_target)) --project=$project_arg -e "using Pkg; Pkg.instantiate(); Pkg.precompile()"`, env_overrides...)
+    inst_cmd = `$(Base.julia_cmd(cpu_target=precompile_cpu_target)) --project=$project_arg -e "using Pkg; Pkg.instantiate(); Pkg.precompile()"`
     recipe.verbose && println("Running: $inst_cmd")
     precompile_time = time_ns()
     if !success(pipeline(inst_cmd; stdout, stderr))
@@ -110,7 +109,6 @@ function compile_products(recipe::ImageRecipe)
     end
 
     # Threading
-    cmd = addenv(cmd, "OPENBLAS_NUM_THREADS" => 1, "JULIA_NUM_THREADS" => 1, env_overrides...)
     recipe.verbose && println("Running: $cmd")
     # Show a spinner while the compiler runs
     spinner_done, spinner_task = _start_spinner("Compiling...")
