@@ -100,7 +100,7 @@ function compile_products(recipe::ImageRecipe)
     for a in recipe.julia_args
         cmd = `$cmd $a`
     end
-    cmd = `$cmd $(joinpath(@__DIR__, "scripts", "juliac-buildscript.jl")) --source $(abspath(recipe.file)) $(recipe.output_type)`
+    cmd = `$cmd $(joinpath(JuliaC.SCRIPTS_DIR, "juliac-buildscript.jl")) --scripts-dir $(JuliaC.SCRIPTS_DIR) --source $(abspath(recipe.file)) $(recipe.output_type)`
     if recipe.add_ccallables
         cmd = `$cmd --compile-ccallable`
     end
