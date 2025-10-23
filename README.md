@@ -35,42 +35,39 @@ compile an executable and produce a self-contained bundle in `build/`:
 ```bash
 juliac \
   --output-exe app_test_exe \
-  --project test/AppProject\
   --bundle build \
   --trim=safe \
   --experimental \
-  --verbose \
-  test/AppProject/src/test.jl
+  test/AppProject
 ```
 
 Notes:
 - `--trim[=mode]` enables removing unreachable code; on 1.12 prereleases this implies `--experimental`.
 - Define `function @main(args::Vector{String})` in your package or source file to build an executable.
+- For simple scripts, a source file may be specified instead of a package directory, but this is not recommended.
 
-### Quick start (module, no app install)
+### Quick start (without app install)
 
 ```bash
 julia --project -e "using JuliaC; JuliaC.main(ARGS)" -- \
   --output-exe app_test_exe \
-  --project test/AppProject \
   --bundle build \
   --trim=safe \
   --experimental \
-  --verbose \
-  test/AppProject/src/test.jl
+  test/AppProject
 ```
 
 ### CLI reference
 
 - `--output-exe <name>`: Output native executable name (no path). Use `--bundle` to choose destination directory.
 - `--output-lib|--output-sysimage|--output-o|--output-bc <path>`: Output path for non-executable artifacts.
-- `--project <path>`: App project to instantiate/precompile (defaults to active project).
+- `--project <path>`: Project to instantiate/precompile (defaults to active project).
 - `--bundle <dir>`: Copy required Julia libs/stdlibs and artifacts next to the output; also sets a relative rpath.
-- `--trim[=mode]`: Enable IR/metadata trimming (e.g. `--trim=safe`). Use `--trim=no` to disable.
+- `--trim[=mode]`: Enable code trimming (e.g. `--trim=safe`). Use `--trim=no` to disable.
 - `--compile-ccallable`: Export `ccallable` entrypoints (see C-callable section).
 - `--experimental`: Forwarded to Julia; required for `--trim` on some builds.
 - `--verbose`: Print underlying commands and timing.
-- `<file>`: The Julia entry file to compile (must define `@main` for executables).
+- `<file>`: The Julia entry file or package to compile (must define `@main` for executables).
 
 ### Library API
 
@@ -79,8 +76,7 @@ using JuliaC
 
 img = ImageRecipe(
     output_type = "--output-exe",
-    file        = "test/AppProject/src/test.jl",
-    project     = "test/AppProject",
+    file        = "test/AppProject",
     trim_mode   = "safe",
     add_ccallables = false,
     verbose     = true,
