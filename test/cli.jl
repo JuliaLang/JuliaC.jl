@@ -11,9 +11,8 @@ end
     exename = "app"
     cliargs = String[
         "--output-exe", exename,
-        "--project", TEST_PROJ,
         "--trim=safe",
-        TEST_SRC,
+        TEST_PROJ,
         "--bundle", outdir,
         "--verbose",
     ]
