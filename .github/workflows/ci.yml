@@ -14,14 +14,13 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        version: [ 'pre' ]
-        os: [ ubuntu-latest, windows-latest, macos-14]
-        arch: [ x64, arm64 ]
-        exclude:
-          - os: windows-latest
-            arch: arm64
-          - os: ubuntu-latest
-            arch: arm64
+        version: [ '1' ]
+        os: [ ubuntu-latest, windows-latest, macos-15-intel]
+        arch: [ x64 ]
+        include:
+          - os: macos-latest
+            arch: aarch64
+            version: '1'
     steps:
       - uses: actions/checkout@v5
       - uses: julia-actions/setup-julia@v2
