@@ -127,7 +127,11 @@ function link_products(recipe::LinkRecipe)
         mkpath(dirname(recipe.outname))
         is_shared_output = image_recipe.output_type != "--output-exe"
         # Base command
-        cmd2 = `$(compiler_cmd) $(allflags) $(rpath_str) -o $(recipe.outname)`
+        cmd2 = `$(compiler_cmd)`
+        for f in recipe.cc_flags
+            cmd2 = `$cmd2 $f`
+        end
+        cmd2 = `$cmd2 $(allflags) $(rpath_str) -o $(recipe.outname)`
         if is_shared_output
             cmd2 = `$cmd2 -shared`
         end
