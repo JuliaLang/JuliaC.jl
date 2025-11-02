@@ -34,6 +34,7 @@ Base.@kwdef mutable struct LinkRecipe
     image_recipe::ImageRecipe = ImageRecipe()
     outname::String = ""
     rpath::Union{String, Nothing} = nothing
+    cc_flags::Vector{String} = String[]
 end
 
 Base.@kwdef mutable struct BundleRecipe
