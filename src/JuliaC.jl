@@ -173,7 +173,10 @@ function _main_cli(args::Vector{String}; io::IO=stdout)
         # Only link when not building with --output-o or --output-bc
         link_products(link)
     end
-    bundle_products(bun)
+    if should_be_bundled(bun)
+        # Only bundle when not building with --output-o or --output-bc
+        bundle_products(bun)
+    end
 end
 
 function (@main)(ARGS)
