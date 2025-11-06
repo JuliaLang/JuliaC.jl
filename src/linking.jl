@@ -63,12 +63,16 @@ function get_compiler_cmd(; cplusplus::Bool=false)
     return compiler_cmd
 end
 
+function should_be_linked(recipe::LinkRecipe)
+    return !(recipe.image_recipe.output_type == "--output-o" || recipe.image_recipe.output_type == "--output-bc")
+end
+
 function link_products(recipe::LinkRecipe)
     link_start = time_ns()
     image_recipe = recipe.image_recipe
 
     # Validate that linking makes sense for this output type
-    if image_recipe.output_type == "--output-o" || image_recipe.output_type == "--output-bc"
+    if !should_be_linked(recipe)
         error("Cannot link $(image_recipe.output_type) output type. $(image_recipe.output_type) generates object files/archives that don't require linking. Use compile_products() directly instead of link_products().")
     end
     if image_recipe.output_type == "--output-lib" || image_recipe.output_type == "--output-sysimage"

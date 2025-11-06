@@ -169,7 +169,10 @@ function _main_cli(args::Vector{String}; io::IO=stdout)
     end
     img, link, bun = _parse_cli_args(args)
     compile_products(img)
-    link_products(link)
+    if should_be_linked(link)
+        # Only link when not building with --output-o or --output-bc
+        link_products(link)
+    end
     bundle_products(bun)
 end
 
