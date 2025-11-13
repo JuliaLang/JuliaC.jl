@@ -109,6 +109,17 @@ function link_products(recipe::LinkRecipe)
         end
         # Link in the whole archive and user-provided objects, then undo WHOLE_ARCHIVE
         cmd2 = `$cmd2 -Wl,$(Base.Linking.WHOLE_ARCHIVE) $(image_recipe.img_path) $(image_recipe.extra_objects...) -Wl,$(Base.Linking.NO_WHOLE_ARCHIVE) $(julia_libs)`
+        # Platform-specific linker flags
+        lib_name = basename(recipe.outname)
+        if Sys.iswindows()
+            lib_basename, _ = splitext(lib_name)
+            import_lib_path = joinpath(dirname(recipe.outname), lib_basename * ".dll.a")
+            cmd2 = `$cmd2 -Wl,--out-implib=$(import_lib_path)`
+        elseif Sys.isapple()
+            cmd2 = `$cmd2 -Wl,-install_name,@rpath/$(lib_name)`
+        elseif Sys.islinux()
+            cmd2 = `$cmd2 -Wl,-soname,$(lib_name)`
+        end
         image_recipe.verbose && println("Running: $cmd2")
         run(cmd2)
     catch e
