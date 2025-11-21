@@ -79,11 +79,16 @@ function _print_usage(io::IO=stdout)
     println(io, "  --compile-ccallable         Export ccallable entrypoints")
     println(io, "  --experimental              Forwarded to Julia (needed for --trim)")
     println(io, "  --verbose                   Print commands and timings")
+    println(io, "  --version                   Print juliac and julia version")
     println(io, "  -h, --help                  Show this help")
     println(io)
     println(io, "Examples:")
     println(io, "  juliac --output-exe app ./MyApp.jl --bundle build --trim=safe")
     println(io, "  juliac --output-lib build/libmylib --project ./MyLib.jl src/libentry.jl")
+end
+
+function _print_version(io::IO=stdout)
+    println(io, "juliac version $(pkgversion(JuliaC)), julia version $(VERSION)")
 end
 
 # CLI app entrypoint for Pkg apps
@@ -165,6 +170,9 @@ end
 function _main_cli(args::Vector{String}; io::IO=stdout)
     if isempty(args) || any(a -> a == "-h" || a == "--help", args)
         _print_usage(io)
+        return
+    elseif "--version" in args
+        _print_version(io)
         return
     end
     img, link, bun = _parse_cli_args(args)
