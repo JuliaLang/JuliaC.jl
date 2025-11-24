@@ -137,3 +137,10 @@ end
     @test occursin("--verbose", out)
     @test occursin("--help", out)
 end
+
+@testset "CLI --version" begin
+    io = IOBuffer()
+    JuliaC._main_cli(String["--version"]; io = io)
+    @test String(take!(io)) ==
+        "juliac version $(pkgversion(JuliaC)), julia version $(VERSION)\n"
+end
