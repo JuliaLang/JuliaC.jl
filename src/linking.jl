@@ -21,41 +21,42 @@ end
 function get_compiler_cmd(; cplusplus::Bool=false)
     cc = get(ENV, "JULIA_CC", nothing)
     path = nothing
-    @static if Sys.iswindows()
-        path = joinpath(LazyArtifacts.artifact"mingw-w64",
-                        "extracted_files",
-                        (Int==Int64 ? "mingw64" : "mingw32"),
-                        "bin",
-                        cplusplus ? "g++.exe" : "gcc.exe")
-        compiler_cmd = `$path`
-    end
     if cc !== nothing
         compiler_cmd = Cmd(Base.shell_split(cc))
         path = nothing
-    elseif !Sys.iswindows()
-        compilers_cpp = ("g++", "clang++")
-        compilers_c = ("gcc", "clang")
-        found_compiler = false
-        if cplusplus
-            for compiler in compilers_cpp
-                if Sys.which(compiler) !== nothing
-                    compiler_cmd = `$compiler`
-                    found_compiler = true
-                    break
+    else
+        @static if Sys.iswindows()
+            path = joinpath(LazyArtifacts.artifact"mingw-w64",
+                            "extracted_files",
+                            (Int==Int64 ? "mingw64" : "mingw32"),
+                            "bin",
+                            cplusplus ? "g++.exe" : "gcc.exe")
+            compiler_cmd = `$path`
+        else
+            compilers_cpp = ("g++", "clang++")
+            compilers_c = ("gcc", "clang")
+            found_compiler = false
+            if cplusplus
+                for compiler in compilers_cpp
+                    if Sys.which(compiler) !== nothing
+                        compiler_cmd = `$compiler`
+                        found_compiler = true
+                        break
+                    end
                 end
             end
-        end
-        if !found_compiler
-            for compiler in compilers_c
-                if Sys.which(compiler) !== nothing
-                    compiler_cmd = `$compiler`
-                    found_compiler = true
-                    break
+            if !found_compiler
+                for compiler in compilers_c
+                    if Sys.which(compiler) !== nothing
+                        compiler_cmd = `$compiler`
+                        found_compiler = true
+                        break
+                    end
                 end
             end
+            found_compiler || error("could not find a compiler, looked for ",
+                join(((cplusplus ? compilers_cpp : ())..., compilers_c...), ", ", " and "))
         end
-        found_compiler || error("could not find a compiler, looked for ",
-            join(((cplusplus ? compilers_cpp : ())..., compilers_c...), ", ", " and "))
     end
     if path !== nothing
         compiler_cmd = addenv(compiler_cmd, "PATH" => string(ENV["PATH"], ";", dirname(path)))
