@@ -78,12 +78,43 @@ function compile_products(recipe::ImageRecipe)
     end
 
     project_arg = recipe.project == "" ? Base.active_project() : recipe.project
+    # Prepare environment overrides for the precompile step. We clear JULIA_LOAD_PATH
+    # by default so precompilation happens in a clean environment. If trimming is
+    # enabled, create a temporary depot with a LocalPreferences.toml so packages can
+    # read a compile-time preference (e.g. Preferences.load_preference(Preferences, "_trim_enabled")).
     env_overrides = Dict{String,Any}("JULIA_LOAD_PATH"=>nothing)
+    tmp_depot = nothing
+    if is_trim_enabled(recipe)
+        # Create a temporary depot and write LocalPreferences.toml with _trim_enabled = true
+        tmp_depot = mktempdir()
+        prefs_dir = joinpath(tmp_depot, "config")
+        mkpath(prefs_dir)
+        prefs_file = joinpath(prefs_dir, "LocalPreferences.toml")
+        open(prefs_file, "w") do io
+            println(io, "[Preferences]")
+            println(io, "_trim_enabled = true")
+        end
+        # Use this temporary depot for the precompile subprocess so Preferences.jl
+        # will pick up the compile-time preference.
+        env_overrides["JULIA_DEPOT_PATH"] = tmp_depot
+    end
+
     inst_cmd = addenv(`$(Base.julia_cmd(cpu_target=precompile_cpu_target)) --project=$project_arg -e "using Pkg; Pkg.instantiate(); Pkg.precompile()"`, env_overrides...)
     recipe.verbose && println("Running: $inst_cmd")
     precompile_time = time_ns()
-    if !success(pipeline(inst_cmd; stdout, stderr))
-        error("Error encountered during instantiate/precompile of app project.")
+    try
+        if !success(pipeline(inst_cmd; stdout, stderr))
+            error("Error encountered during instantiate/precompile of app project.")
+        end
+    finally
+        # Cleanup temporary depot if created
+        if tmp_depot !== nothing
+            try
+                rm(tmp_depot; recursive=true, force=true)
+            catch
+                @warn "Failed to remove temporary depot: $tmp_depot"
+            end
+        end
     end
     recipe.verbose && println("Precompilation took $((time_ns() - precompile_time)/1e9) s")
     # Compile the Julia code
