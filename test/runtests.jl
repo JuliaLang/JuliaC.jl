@@ -8,6 +8,7 @@ const TEST_PROJ = abspath(joinpath(@__DIR__, "AppProject"))
 const TEST_SRC = joinpath(TEST_PROJ, "src", "test.jl")
 const TEST_LIB_PROJ = abspath(joinpath(@__DIR__, "lib_project"))
 const TEST_LIB_SRC = joinpath(TEST_LIB_PROJ, "src", "libtest.jl")
+const TEST_TRIM_PREFS_PROJ = abspath(joinpath(@__DIR__, "TrimPrefsProject"))
 
 include("utils.jl")
 include("programatic.jl")

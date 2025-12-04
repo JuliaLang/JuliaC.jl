@@ -78,52 +78,79 @@ function compile_products(recipe::ImageRecipe)
     end
 
     project_arg = recipe.project == "" ? Base.active_project() : recipe.project
-    env_overrides = Dict{String,Any}("JULIA_LOAD_PATH"=>nothing)
+    env_overrides = Dict{String,Any}()
+    tmp_prefs_env = nothing
+    if is_trim_enabled(recipe)
+        # Create a temporary environment with a LocalPreferences.toml that will be added to JULIA_LOAD_PATH. 
+        tmp_prefs_env = mktempdir()
+        # Create a Project.toml file so it's recognized as an environment
+        touch(joinpath(tmp_prefs_env, "Project.toml"))
+        # Write LocalPreferences.toml with the trim preferences
+        open(joinpath(tmp_prefs_env, "LocalPreferences.toml"), "w") do io
+            println(io, "[Preferences]")
+            println(io, "trim_enabled = true")
+        end
+        # Prepend the temp env to JULIA_LOAD_PATH
+        load_path_sep = Sys.iswindows() ? ";" : ":"
+        env_overrides["JULIA_LOAD_PATH"] = join([tmp_prefs_env, "@", "@stdlib"], load_path_sep)
+    end
+
     inst_cmd = addenv(`$(Base.julia_cmd(cpu_target=precompile_cpu_target)) --project=$project_arg -e "using Pkg; Pkg.instantiate(); Pkg.precompile()"`, env_overrides...)
     recipe.verbose && println("Running: $inst_cmd")
     precompile_time = time_ns()
-    if !success(pipeline(inst_cmd; stdout, stderr))
-        error("Error encountered during instantiate/precompile of app project.")
-    end
-    recipe.verbose && println("Precompilation took $((time_ns() - precompile_time)/1e9) s")
-    # Compile the Julia code
-    if recipe.img_path == ""
-        tmpdir = mktempdir()
-        recipe.img_path = joinpath(tmpdir, "image.o.a")
-    end
-    project_arg = recipe.project == "" ? Base.active_project() : recipe.project
-    # Build command incrementally to guarantee proper token separation
-    cmd = julia_cmd
-    cmd = `$cmd --project=$project_arg $(image_arg) $(recipe.img_path) --output-incremental=no`
-    for a in strip_args
-        cmd = `$cmd $a`
-    end
-    for a in recipe.julia_args
-        cmd = `$cmd $a`
-    end
-    cmd = `$cmd $(joinpath(JuliaC.SCRIPTS_DIR, "juliac-buildscript.jl")) --scripts-dir $(JuliaC.SCRIPTS_DIR) --source $(abspath(recipe.file)) $(recipe.output_type)`
-    if recipe.add_ccallables
-        cmd = `$cmd --compile-ccallable`
-    end
-    if recipe.use_loaded_libs
-        cmd = `$cmd --use-loaded-libs`
-    end
-
-    # Threading
-    cmd = addenv(cmd, env_overrides...)
-    recipe.verbose && println("Running: $cmd")
-    # Show a spinner while the compiler runs
-    spinner_done, spinner_task = _start_spinner("Compiling...")
-    compile_time = time_ns()
     try
-        if !success(pipeline(cmd; stdout, stderr))
-            error("Failed to compile $(recipe.file)")
+        if !success(pipeline(inst_cmd; stdout, stderr))
+            error("Error encountered during instantiate/precompile of app project.")
         end
+        recipe.verbose && println("Precompilation took $((time_ns() - precompile_time)/1e9) s")
+        # Compile the Julia code
+        if recipe.img_path == ""
+            tmpdir = mktempdir()
+            recipe.img_path = joinpath(tmpdir, "image.o.a")
+        end
+        project_arg = recipe.project == "" ? Base.active_project() : recipe.project
+        # Build command incrementally to guarantee proper token separation
+        cmd = julia_cmd
+        cmd = `$cmd --project=$project_arg $(image_arg) $(recipe.img_path) --output-incremental=no`
+        for a in strip_args
+            cmd = `$cmd $a`
+        end
+        for a in recipe.julia_args
+            cmd = `$cmd $a`
+        end
+        cmd = `$cmd $(joinpath(JuliaC.SCRIPTS_DIR, "juliac-buildscript.jl")) --scripts-dir $(JuliaC.SCRIPTS_DIR) --source $(abspath(recipe.file)) $(recipe.output_type)`
+        if recipe.add_ccallables
+            cmd = `$cmd --compile-ccallable`
+        end
+        if recipe.use_loaded_libs
+            cmd = `$cmd --use-loaded-libs`
+        end
+
+        # Threading
+        cmd = addenv(cmd, env_overrides...)
+        recipe.verbose && println("Running: $cmd")
+        # Show a spinner while the compiler runs
+        spinner_done, spinner_task = _start_spinner("Compiling...")
+        compile_time = time_ns()
+        try
+            if !success(pipeline(cmd; stdout, stderr))
+                error("Failed to compile $(recipe.file)")
+            end
+        finally
+            spinner_done[] = true
+            wait(spinner_task)
+        end
+        recipe.verbose && println("Compilation took $((time_ns() - compile_time)/1e9) s")
     finally
-        spinner_done[] = true
-        wait(spinner_task)
+        # Cleanup temporary preferences environment if created
+        if tmp_prefs_env !== nothing
+            try
+                rm(tmp_prefs_env; recursive=true, force=true)
+            catch e
+                @warn "Failed to cleanup temporary preferences environment: $tmp_prefs_env" exception=e
+            end
+        end
     end
-    recipe.verbose && println("Compilation took $((time_ns() - compile_time)/1e9) s")
     # Print compiled image size
     if recipe.verbose
         @assert isfile(recipe.img_path)
