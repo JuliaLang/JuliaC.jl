@@ -80,18 +80,26 @@ function compile_products(recipe::ImageRecipe)
     project_arg = recipe.project == "" ? Base.active_project() : recipe.project
     env_overrides = Dict{String,Any}()
     tmp_prefs_env = nothing
+    tmp_depot = nothing
     if is_trim_enabled(recipe)
+        # Create a temporary depot so packages are recompiled fresh with the trim preference
+        load_path_sep = Sys.iswindows() ? ";" : ":"
+        tmp_depot = mktempdir()
+        env_overrides["JULIA_DEPOT_PATH"] = "$(tmp_depot)$(load_path_sep)"
         # Create a temporary environment with a LocalPreferences.toml that will be added to JULIA_LOAD_PATH. 
         tmp_prefs_env = mktempdir()
-        # Create a Project.toml file so it's recognized as an environment
-        touch(joinpath(tmp_prefs_env, "Project.toml"))
+        # Write Project.toml with Preferences as a dependency so preferences are inherited
+        open(joinpath(tmp_prefs_env, "Project.toml"), "w") do io
+            println(io, "[deps]")
+            println(io, "Preferences = \"21216c6a-2e73-6563-6e65-726566657250\"")
+        end
         # Write LocalPreferences.toml with the trim preferences
         open(joinpath(tmp_prefs_env, "LocalPreferences.toml"), "w") do io
             println(io, "[Preferences]")
             println(io, "trim_enabled = true")
         end
         # Prepend the temp env to JULIA_LOAD_PATH
-        load_path_sep = Sys.iswindows() ? ";" : ":"
+
         env_overrides["JULIA_LOAD_PATH"] = join([tmp_prefs_env, "@", "@stdlib"], load_path_sep)
     end
 
@@ -148,6 +156,14 @@ function compile_products(recipe::ImageRecipe)
                 rm(tmp_prefs_env; recursive=true, force=true)
             catch e
                 @warn "Failed to cleanup temporary preferences environment: $tmp_prefs_env" exception=e
+            end
+        end
+        # Cleanup temporary depot if created
+        if tmp_depot !== nothing
+            try
+                rm(tmp_depot; recursive=true, force=true)
+            catch e
+                @warn "Failed to cleanup temporary depot: $tmp_depot" exception=e
             end
         end
     end
