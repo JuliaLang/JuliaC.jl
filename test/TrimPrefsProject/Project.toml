@@ -1,0 +1,10 @@
+name = "TrimPrefsProject"
+uuid = "2685b477-6e63-411d-9143-facd9abab21c"
+version = "0.1.0"
+authors = ["Gabriel Baraldi <baraldigabriel@gmail.com>"]
+
+[deps]
+Preferences = "21216c6a-2e73-6563-6e65-726566657250"
+
+[compat]
+Preferences = "1.5.0"
