@@ -114,6 +114,59 @@
             @test occursin("42", out)
         end
     end
+
+    # https://github.com/JuliaLang/JuliaC.jl/pull/74
+    @testset "Library has SONAME (Linux)" begin
+        if Sys.islinux()
+            outdir = mktempdir()
+            libname = "libhassonametest"
+            libout = joinpath(outdir, libname)
+            link = JuliaC.LinkRecipe(image_recipe=img_lib, outname=libout)
+            JuliaC.link_products(link)
+            bun = JuliaC.BundleRecipe(link_recipe=link, output_dir=outdir)
+            JuliaC.bundle_products(bun)
+
+            soname = libname * "." * Base.BinaryPlatforms.platform_dlext()
+            libpath = joinpath(outdir, "lib", soname)
+            actual_soname = readchomp(`$(Patchelf_jll.patchelf()) --print-soname $(libpath)`)
+            @test actual_soname == soname
+        end
+    end
+
+    # https://github.com/JuliaLang/JuliaC.jl/pull/74
+    @testset "Library has install_name (MacOS)" begin
+        if Sys.isapple()
+            outdir = mktempdir()
+            libname = "libhasinstallnametest"
+            libout = joinpath(outdir, libname)
+            link = JuliaC.LinkRecipe(image_recipe=img_lib, outname=libout)
+            JuliaC.link_products(link)
+            bun = JuliaC.BundleRecipe(link_recipe=link, output_dir=outdir)
+            JuliaC.bundle_products(bun)
+
+            dylibname = libname * "." * Base.BinaryPlatforms.platform_dlext()
+            libpath = joinpath(outdir, "lib", dylibname)
+            # otool -D prints filename on first line, install_name on second
+            install_name = split(readchomp(`otool -D $(libpath)`), '\n')[end]
+            @test install_name == "@rpath/$(dylibname)"
+        end
+    end
+
+    # https://github.com/JuliaLang/JuliaC.jl/pull/74
+    @testset "Library has import library (Windows)" begin
+        if Sys.iswindows()
+            outdir = mktempdir()
+            libname = "libhasimplibtest"
+            libout = joinpath(outdir, libname)
+            link = JuliaC.LinkRecipe(image_recipe=img_lib, outname=libout)
+            JuliaC.link_products(link)
+            bun = JuliaC.BundleRecipe(link_recipe=link, output_dir=outdir)
+            JuliaC.bundle_products(bun)
+
+            implibpath = joinpath(outdir, libname * ".dll.a")
+            @test isfile(implibpath)
+        end
+    end
 end
 
 @testset "Programmatic binary (trim)" begin
@@ -248,4 +301,28 @@ end
     @test occursin("Fast compilation test!", output)
     # Print tree for debugging/inspection
     print_tree_with_sizes(outdir)
+end
+
+@testset "Trim preference propagation" begin
+    # Test that the trim_enabled preference is correctly propagated to packages
+    # during precompilation and compilation when trim mode is enabled.
+    # This verifies that LocalPreferences.toml is written and read correctly.
+    outdir = mktempdir()
+    exeout = joinpath(outdir, "trim_prefs_exe")
+    img = JuliaC.ImageRecipe(
+        file = TEST_TRIM_PREFS_PROJ,
+        output_type = "--output-exe",
+        trim_mode = "safe",
+        verbose = true,
+    )
+    JuliaC.compile_products(img)
+    link = JuliaC.LinkRecipe(image_recipe=img, outname=exeout)
+    JuliaC.link_products(link)
+    bun = JuliaC.BundleRecipe(link_recipe=link, output_dir=outdir)
+    JuliaC.bundle_products(bun)
+    actual_exe = Sys.iswindows() ? joinpath(outdir, "bin", basename(exeout) * ".exe") : joinpath(outdir, "bin", basename(exeout))
+    @test isfile(actual_exe)
+    output = read(`$actual_exe`, String)
+    # When trim is enabled, the package should see trim_enabled = true
+    @test occursin("TRIM_MODE_ENABLED", output)
 end

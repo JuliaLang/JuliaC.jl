@@ -1,3 +1,14 @@
+# Helper to conditionally create and manage a temporary depot for trim preferences
+# When trim is enabled, creates a temp depot and calls f(depot_path) with automatic cleanup.
+# When trim is disabled, calls f(nothing) without creating a depot.
+function mktempdepot(f, trim_enabled::Bool)
+    if trim_enabled
+        mktempdir(f)
+    else
+        f(nothing)
+    end
+end
+
 # Lightweight terminal spinner
 function _start_spinner(message::String; io::IO=stderr)
     anim_chars = ("◐", "◓", "◑", "◒")
@@ -78,83 +89,92 @@ function compile_products(recipe::ImageRecipe)
     end
 
     project_arg = recipe.project == "" ? Base.active_project() : recipe.project
-    # Prepare environment overrides for the precompile step. We clear JULIA_LOAD_PATH
-    # by default so precompilation happens in a clean environment. If trimming is
-    # enabled, create a temporary depot with a LocalPreferences.toml so packages can
-    # read a compile-time preference (e.g. Preferences.load_preference(Preferences, "_trim_enabled")).
-    env_overrides = Dict{String,Any}("JULIA_LOAD_PATH"=>nothing)
-    tmp_depot = nothing
-    if is_trim_enabled(recipe)
-        # Create a temporary depot and write LocalPreferences.toml with _trim_enabled = true
-        tmp_depot = mktempdir()
-        prefs_dir = joinpath(tmp_depot, "config")
-        mkpath(prefs_dir)
-        prefs_file = joinpath(prefs_dir, "LocalPreferences.toml")
-        open(prefs_file, "w") do io
-            println(io, "[Preferences]")
-            println(io, "_trim_enabled = true")
-        end
-        # Use this temporary depot for the precompile subprocess so Preferences.jl
-        # will pick up the compile-time preference.
-        env_overrides["JULIA_DEPOT_PATH"] = tmp_depot
-    end
 
-    inst_cmd = addenv(`$(Base.julia_cmd(cpu_target=precompile_cpu_target)) --project=$project_arg -e "using Pkg; Pkg.instantiate(); Pkg.precompile()"`, env_overrides...)
-    recipe.verbose && println("Running: $inst_cmd")
-    precompile_time = time_ns()
-    try
-        if !success(pipeline(inst_cmd; stdout, stderr))
-            error("Error encountered during instantiate/precompile of app project.")
-        end
-    finally
-        # Cleanup temporary depot if created
+    # Use mktempdepot helper to conditionally manage temp depot and preferences environment.
+    # When trim is enabled, the helper creates a temp depot and passes it to the block.
+    # When trim is disabled, it passes nothing.
+    mktempdepot(is_trim_enabled(recipe)) do tmp_depot
+        env_overrides = Dict{String,Any}()
+        tmp_prefs_env = nothing
+
+        # If a temporary depot was created, set JULIA_DEPOT_PATH and create preferences environment
         if tmp_depot !== nothing
+            load_path_sep = Sys.iswindows() ? ";" : ":"
+            env_overrides["JULIA_DEPOT_PATH"] = tmp_depot * load_path_sep
+
+            # Create a temporary environment with a LocalPreferences.toml that will be added to JULIA_LOAD_PATH
+            tmp_prefs_env = mktempdir()
+            # Write Project.toml with Preferences as a dependency so preferences are inherited
+            open(joinpath(tmp_prefs_env, "Project.toml"), "w") do io
+                println(io, "[deps]")
+                println(io, "Preferences = \"21216c6a-2e73-6563-6e65-726566657250\"")
+            end
+            # Write LocalPreferences.toml with the trim preferences
+            open(joinpath(tmp_prefs_env, "LocalPreferences.toml"), "w") do io
+                println(io, "[Preferences]")
+                println(io, "trim_enabled = true")
+            end
+            # Prepend the temp env to JULIA_LOAD_PATH; let Julia expand @ and @stdlib implicitly
+            env_overrides["JULIA_LOAD_PATH"] = tmp_prefs_env * load_path_sep
+        end
+
+        try
+            inst_cmd = addenv(`$(Base.julia_cmd(cpu_target=precompile_cpu_target)) --project=$project_arg -e "using Pkg; Pkg.instantiate(); Pkg.precompile()"`, env_overrides...)
+            recipe.verbose && println("Running: $inst_cmd")
+            precompile_time = time_ns()
+            if !success(pipeline(inst_cmd; stdout, stderr))
+                error("Error encountered during instantiate/precompile of app project.")
+            end
+            recipe.verbose && println("Precompilation took $((time_ns() - precompile_time)/1e9) s")
+            # Compile the Julia code
+            if recipe.img_path == ""
+                tmpdir = mktempdir()
+                recipe.img_path = joinpath(tmpdir, "image.o.a")
+            end
+            project_arg = recipe.project == "" ? Base.active_project() : recipe.project
+            # Build command incrementally to guarantee proper token separation
+            cmd = julia_cmd
+            cmd = `$cmd --project=$project_arg $(image_arg) $(recipe.img_path) --output-incremental=no`
+            for a in strip_args
+                cmd = `$cmd $a`
+            end
+            for a in recipe.julia_args
+                cmd = `$cmd $a`
+            end
+            cmd = `$cmd $(joinpath(JuliaC.SCRIPTS_DIR, "juliac-buildscript.jl")) --scripts-dir $(JuliaC.SCRIPTS_DIR) --source $(abspath(recipe.file)) $(recipe.output_type)`
+            if recipe.add_ccallables
+                cmd = `$cmd --compile-ccallable`
+            end
+            if recipe.use_loaded_libs
+                cmd = `$cmd --use-loaded-libs`
+            end
+
+            # Threading
+            cmd = addenv(cmd, env_overrides...)
+            recipe.verbose && println("Running: $cmd")
+            # Show a spinner while the compiler runs
+            spinner_done, spinner_task = _start_spinner("Compiling...")
+            compile_time = time_ns()
             try
-                rm(tmp_depot; recursive=true, force=true)
-            catch
-                @warn "Failed to remove temporary depot: $tmp_depot"
+                if !success(pipeline(cmd; stdout, stderr))
+                    error("Failed to compile $(recipe.file)")
+                end
+            finally
+                spinner_done[] = true
+                wait(spinner_task)
+            end
+            recipe.verbose && println("Compilation took $((time_ns() - compile_time)/1e9) s")
+        finally
+            # Cleanup temporary preferences environment if created
+            if tmp_prefs_env !== nothing
+                try
+                    rm(tmp_prefs_env; recursive=true, force=true)
+                catch e
+                    @warn "Failed to cleanup temporary preferences environment: $tmp_prefs_env" exception=e
+                end
             end
         end
     end
-    recipe.verbose && println("Precompilation took $((time_ns() - precompile_time)/1e9) s")
-    # Compile the Julia code
-    if recipe.img_path == ""
-        tmpdir = mktempdir()
-        recipe.img_path = joinpath(tmpdir, "image.o.a")
-    end
-    project_arg = recipe.project == "" ? Base.active_project() : recipe.project
-    # Build command incrementally to guarantee proper token separation
-    cmd = julia_cmd
-    cmd = `$cmd --project=$project_arg $(image_arg) $(recipe.img_path) --output-incremental=no`
-    for a in strip_args
-        cmd = `$cmd $a`
-    end
-    for a in recipe.julia_args
-        cmd = `$cmd $a`
-    end
-    cmd = `$cmd $(joinpath(JuliaC.SCRIPTS_DIR, "juliac-buildscript.jl")) --scripts-dir $(JuliaC.SCRIPTS_DIR) --source $(abspath(recipe.file)) $(recipe.output_type)`
-    if recipe.add_ccallables
-        cmd = `$cmd --compile-ccallable`
-    end
-    if recipe.use_loaded_libs
-        cmd = `$cmd --use-loaded-libs`
-    end
-
-    # Threading
-    cmd = addenv(cmd, env_overrides...)
-    recipe.verbose && println("Running: $cmd")
-    # Show a spinner while the compiler runs
-    spinner_done, spinner_task = _start_spinner("Compiling...")
-    compile_time = time_ns()
-    try
-        if !success(pipeline(cmd; stdout, stderr))
-            error("Failed to compile $(recipe.file)")
-        end
-    finally
-        spinner_done[] = true
-        wait(spinner_task)
-    end
-    recipe.verbose && println("Compilation took $((time_ns() - compile_time)/1e9) s")
     # Print compiled image size
     if recipe.verbose
         @assert isfile(recipe.img_path)

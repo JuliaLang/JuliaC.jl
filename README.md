@@ -1,6 +1,6 @@
 ## JuliaC
 
-JuliaC is a companion to PackageCompiler that streamlines turning Julia code into a native executable, shared library, system image, or intermediate object/bitcode. It provides:
+JuliaC is a companion to [PackageCompiler](https://github.com/JuliaLang/PackageCompiler.jl) that streamlines turning Julia code into a native executable, shared library, system image, or intermediate object/bitcode. It provides:
 
 - A CLI app `juliac`
 - A simple library API with explicit "compile → link → bundle" steps
