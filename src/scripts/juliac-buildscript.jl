@@ -28,12 +28,14 @@ end
 #   --compile-ccallable          : Export ccallable entrypoints (for shared libraries).
 #   --use-loaded-libs            : Enable Libdl.dlopen override to reuse existing loads.
 #   --scripts-dir <path>         : Directory containing build helper scripts.
-source_path, output_type, add_ccallables, use_loaded_libs, scripts_dir = let
+#   --export-abi <path>          : Emit JSON ABI spec
+source_path, output_type, add_ccallables, use_loaded_libs, scripts_dir, export_abi = let
     source_path = ""
     output_type = ""
     add_ccallables = false
     use_loaded_libs = false
     scripts_dir = abspath(dirname(PROGRAM_FILE))
+    export_abi = nothing
     it = Iterators.Stateful(ARGS)
     for arg in it
         if startswith(arg, "--source=")
@@ -54,10 +56,12 @@ source_path, output_type, add_ccallables, use_loaded_libs, scripts_dir = let
             add_ccallables = true
         elseif arg == "--use-loaded-libs"
             use_loaded_libs = true
+        elseif arg == "--export-abi"
+            export_abi = popfirst!(it)
         end
     end
     source_path == "" && error("Missing required --source <path>")
-    (source_path, output_type, add_ccallables, use_loaded_libs, scripts_dir)
+    (source_path, output_type, add_ccallables, use_loaded_libs, scripts_dir, export_abi)
 end
 
 # Load user code
@@ -135,6 +139,14 @@ let usermod
         else
             ccall(:jl_add_ccallable_entrypoints, Cvoid, ())
         end
+    end
+end
+
+if export_abi !== nothing
+    include(joinpath(@__DIR__, "..", "abi_export.jl"))
+    Core.@latestworld
+    open(export_abi, "w") do io
+        write_abi_metadata(io)
     end
 end
 
