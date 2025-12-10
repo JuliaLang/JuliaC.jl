@@ -123,16 +123,6 @@ let usermod
     end
     #entrypoint(join, (Base.GenericIOBuffer{Memory{UInt8}}, Array{Base.SubString{String}, 1}, String))
     #entrypoint(join, (Base.GenericIOBuffer{Memory{UInt8}}, Array{String, 1}, Char))
-    entrypoint(Base.task_done_hook, (Task,))
-    entrypoint(Base.wait, ())
-    if isdefined(Base, :poptask)
-        entrypoint(Base.poptask, (Base.StickyWorkqueue,))
-    end
-    if isdefined(Base, :wait_forever)
-        entrypoint(Base.wait_forever, ())
-    end
-    entrypoint(Base.trypoptask, (Base.StickyWorkqueue,))
-    entrypoint(Base.checktaskempty, ())
     if add_ccallables
         if isdefined(Base.Compiler, :add_ccallable_entrypoints!)
             Base.Compiler.add_ccallable_entrypoints!()
@@ -163,6 +153,17 @@ end
 if use_loaded_libs
     include(joinpath(scripts_dir, "juliac-libdl-overrides.jl"))
 end
+
+entrypoint(Base.task_done_hook, (Task,))
+entrypoint(Base.wait, ())
+if isdefined(Base, :poptask)
+    entrypoint(Base.poptask, (Base.StickyWorkqueue,))
+end
+if isdefined(Base, :wait_forever)
+    entrypoint(Base.wait_forever, ())
+end
+entrypoint(Base.trypoptask, (Base.StickyWorkqueue,))
+entrypoint(Base.checktaskempty, ())
 
 empty!(Core.ARGS)
 empty!(Base.ARGS)
