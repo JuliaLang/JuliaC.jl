@@ -20,7 +20,13 @@ jobs:
         include:
           - os: macos-latest
             arch: aarch64
-            version: [ '1' , 'pre', 'nightly']
+            version: '1'
+          - os: macos-latest
+            arch: aarch64
+            version: 'pre'
+          - os: macos-latest
+            arch: aarch64
+            version: 'nightly'
     steps:
       - uses: actions/checkout@v5
       - uses: julia-actions/setup-julia@v2
