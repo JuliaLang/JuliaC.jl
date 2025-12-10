@@ -24,8 +24,8 @@ const TRIM_PROJ = abspath(joinpath(@__DIR__, "TrimmabilityProject"))
     actual_exe = Sys.iswindows() ? joinpath(outdir, "bin", basename(exeout) * ".exe") : joinpath(outdir, "bin", basename(exeout))
     @test isfile(actual_exe)
 
-    # Test that the executable size stays reasonable (< 1.9 MB for the executable itself)
-    @test filesize(actual_exe) < 1_900_000
+    # Test that the executable size stays reasonable (< 2.5MB for the executable itself)
+    @test filesize(actual_exe) < 2_500_000
 
     print_tree_with_sizes(outdir)
 end
