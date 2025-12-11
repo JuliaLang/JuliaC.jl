@@ -74,7 +74,7 @@ function _main(argc::Cint, argv::Ptr{Ptr{Cchar}})::Cint
     setglobal!(Base, :PROGRAM_FILE, args[1])
     popfirst!(args)
     append!(Base.ARGS, args)
-    return Main.main(args)
+    exit(Main.main(args))
 end
 
 let usermod
