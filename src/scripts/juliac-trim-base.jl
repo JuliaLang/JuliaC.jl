@@ -13,6 +13,7 @@ end
     depwarn(msg, funcsym; force::Bool=false) = nothing
     _assert_tostring(msg) = ""
     reinit_stdio() = nothing
+    wait_forever() = while true; wait(); end
     JuliaSyntax.enable_in_core!() = nothing
     init_active_project() = ACTIVE_PROJECT[] = nothing
     set_active_project(projfile::Union{AbstractString,Nothing}) = ACTIVE_PROJECT[] = projfile
@@ -81,8 +82,6 @@ end
     show_type_name(io::IO, tn::Core.TypeName) = print(io, tn.name)
     # this function is not `--trim`-compatible if it resolves to a Varargs{...} specialization
     # and since it only has 1-argument methods this happens too often by default (just 2-3 args)
-    setfield!(typeof(throw_eachindex_mismatch_indices).name, :max_args, Int32(5), :monotonic)
-
     mapreduce(f::F, op::F2, A::AbstractArrayOrBroadcasted; dims=:, init=_InitialValue()) where {F, F2} =
     _mapreduce_dim(f, op, init, A, dims)
     mapreduce(f::F, op::F2, A::AbstractArrayOrBroadcasted...; kw...) where {F, F2} =
@@ -108,12 +107,20 @@ end
     mapreduce_empty(::typeof(identity), op::F, T) where {F} = reduce_empty(op, T)
     mapreduce_empty(::typeof(abs), op::F, T) where {F}     = abs(reduce_empty(op, T))
     mapreduce_empty(::typeof(abs2), op::F, T) where {F}    = abs2(reduce_empty(op, T))
-    @noinline function throw_eachindex_mismatch_indices(::IndexLinear, inds...)
+
+    # @noinline in front of function makes the setfield! not work properly
+    function throw_eachindex_mismatch_indices(::IndexLinear, inds...)
+        @noinline 
         throw(DimensionMismatch("all inputs to eachindex must have the same indices"))
     end
-    @noinline function throw_eachindex_mismatch_indices(::IndexCartesian, inds...)
+    function throw_eachindex_mismatch_indices(::IndexCartesian, inds...)
+        @noinline
         throw(DimensionMismatch("all inputs to eachindex must have the same axes"))
     end
+    setfield!(typeof(Base.throw_eachindex_mismatch_indices).name, :max_args, Int32(5), :monotonic)
+    setfield!(typeof(Base.print).name, :max_args, Int32(10), :monotonic)
+    setfield!(typeof(Base.println).name, :max_args, Int32(10), :monotonic)
+    setfield!(typeof(Base.print_to_string).name, :max_args, Int32(10), :monotonic)
 end
 
 # Used for LinearAlgebre ldiv with SVD
