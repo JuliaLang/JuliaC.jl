@@ -88,14 +88,16 @@ end
     JuliaC.bundle_products(bun)
 
     # Library location differs by platform: bin/ on Windows, lib/ on Unix
-    libdir = Sys.iswindows() ? "bin" : "lib"
-    libpath = joinpath(outdir, libdir, basename(libout) * "." * Base.BinaryPlatforms.platform_dlext())
+    libdir = joinpath(outdir, Sys.iswindows() ? "bin" : "lib")
+    libpath = joinpath(libdir, basename(libout) * "." * Base.BinaryPlatforms.platform_dlext())
     @test isfile(libpath)
 
     # Compile and run the C application that uses libsimple
     # Use JuliaC's compiler (MinGW on Windows, system compiler on Unix)
+    bindir = joinpath(outdir, "bin")
+    mkpath(bindir)
     csrc = abspath(joinpath(@__DIR__, "c", "capplication.c"))
-    exe = joinpath(outdir, Sys.iswindows() ? "capplication.exe" : "capplication")
+    exe = joinpath(bindir, Sys.iswindows() ? "capplication.exe" : "capplication")
     cc = JuliaC.get_compiler_cmd()
 
     if Sys.islinux()
