@@ -107,7 +107,7 @@ end
     end
 
     # Run the C application
-    output = readlines(`$exe $libpath`, String)
+    output = readlines(`$exe $libpath`)
     @test length(output) == 2
     @test output[1] == "Sum of copied values: 6.000000"
     @test output[2] == "Count of same vectors: 1"
