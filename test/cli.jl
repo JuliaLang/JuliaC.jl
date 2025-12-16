@@ -158,11 +158,7 @@ end
     @test img.trim_mode == "safe"
     @test link.outname == "app"
     @test bun.output_dir == abspath(dirname(link.outname))
-    if Sys.iswindows()
-        @test link.rpath == bun.libdir
-    else
-        @test link.rpath == joinpath("..", bun.libdir)
-    end
+    @test link.rpath == JuliaC.RPATH_BUNDLE  # Should use @bundle when bundling
 
     # Library with explicit bundle dir, ccallable and experimental
     outdir = mktempdir()
@@ -183,13 +179,8 @@ end
     @test img2.trim_mode == "safe"
     @test link2.outname == joinpath(outdir, "mylib")
     @test bun2.output_dir == outdir
-    if Sys.iswindows()
-        @test link2.rpath == bun2.libdir
-    else
-        @test link2.rpath == joinpath("..", bun2.libdir)
-    end
+    @test link2.rpath == JuliaC.RPATH_BUNDLE  # Should use @bundle when bundling
 
-    # Without --bundle, rpath should be nothing (uses system Julia rpaths)
     args3 = String[
         "--output-exe", "app",
         "--project", TEST_PROJ,
@@ -199,7 +190,7 @@ end
     ]
     img3, link3, bun3 = JuliaC._parse_cli_args(args3)
     @test img3.output_type == "--output-exe"
-    @test link3.rpath === nothing  # Should be nothing when not bundling
+    @test link3.rpath == JuliaC.RPATH_JULIA  # Should use @julia when not bundling
     @test bun3.output_dir === nothing  # No bundling
 
     # Errors: unknown option
