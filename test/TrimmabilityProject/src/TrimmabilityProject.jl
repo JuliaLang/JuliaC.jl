@@ -1,6 +1,7 @@
 # Test that various constructs support trimming
 module TrimmabilityProject
 
+using HostCPUFeatures
 using Sockets
 
 world::String = "world!"

@@ -3,4 +3,8 @@ uuid = "a1b2c3d4-5678-90ab-cdef-1234567890ab"
 version = "0.1.0"
 
 [deps]
+HostCPUFeatures = "3e5b6fbb-0976-4d2c-9146-d79de83f2fb0"
 Sockets = "6462fe0b-24de-5631-8697-dd941f90decc"
+
+[compat]
+HostCPUFeatures = "0.1.18"
