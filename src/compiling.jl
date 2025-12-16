@@ -81,14 +81,11 @@ function compile_products(recipe::ImageRecipe)
     env_overrides = Dict{String,Any}()
     tmp_prefs_env = nothing
     if is_trim_enabled(recipe)
-        # Create a temporary depot so packages are recompiled fresh with the trim preference
         load_path_sep = Sys.iswindows() ? ";" : ":"
-        
         # Create a temporary environment with a LocalPreferences.toml that will be added to JULIA_LOAD_PATH. 
         tmp_prefs_env = mktempdir()
-        # env_overrides["JULIA_DEPOT_PATH"] = tmp_prefs_env * load_path_sep
         open(joinpath(tmp_prefs_env, "Project.toml"), "w") do io
-            println(io, "[deps]")
+            println(io, "[extras]")
             println(io, "HostCPUFeatures = \"3e5b6fbb-0976-4d2c-9146-d79de83f2fb0\"")
         end
         # Write LocalPreferences.toml with the trim preferences
