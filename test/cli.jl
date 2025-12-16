@@ -1,8 +1,12 @@
 using JSON
 
-function run_juliac_cli(args::Vector{String})
+function run_juliac_cli(args::Vector{String}; dir=nothing)
     cmd = `$(Base.julia_cmd()) --startup-file=no --history-file=no --project=$(ROOT) -m JuliaC $args`
-    run(cmd)
+    if dir !== nothing
+        run(Cmd(cmd; dir=dir))
+    else
+        run(cmd)
+    end
 end
 
 @testset "CLI app entrypoint (trim)" begin
@@ -22,6 +26,30 @@ end
     output = read(`$actual_exe`, String)
     @test occursin("Fast compilation test!", output)
     print_tree_with_sizes(outdir)
+end
+
+# Windows expects all binaries to be next to each other, so we can't test this
+if Sys.isunix()
+    @testset "CLI app without bundle (system rpaths)" begin
+        # Test that executables work without --bundle by using system Julia rpaths
+        outdir = mktempdir()
+        exename = "app_nobundle"
+        exepath = joinpath(outdir, exename)
+        cliargs = String[
+            "--output-exe", exename,
+            "--trim=safe",
+            TEST_PROJ,
+            "--verbose",
+        ]
+        # Run in outdir so the exe is created there
+        run_juliac_cli(cliargs; dir=outdir)
+        actual_exe = Sys.iswindows() ? exepath * ".exe" : exepath
+        @test isfile(actual_exe)
+        # The executable should run successfully using system Julia libraries
+        output = read(`$actual_exe`, String)
+        @test occursin("Fast compilation test!", output)
+
+    end
 end
 
 @testset "ABI export" begin
@@ -160,6 +188,19 @@ end
     else
         @test link2.rpath == joinpath("..", bun2.libdir)
     end
+
+    # Without --bundle, rpath should be nothing (uses system Julia rpaths)
+    args3 = String[
+        "--output-exe", "app",
+        "--project", TEST_PROJ,
+        "--trim=safe",
+        TEST_SRC,
+        "--verbose",
+    ]
+    img3, link3, bun3 = JuliaC._parse_cli_args(args3)
+    @test img3.output_type == "--output-exe"
+    @test link3.rpath === nothing  # Should be nothing when not bundling
+    @test bun3.output_dir === nothing  # No bundling
 
     # Errors: unknown option
     @test_throws ErrorException JuliaC._parse_cli_args(String["--unknown"])

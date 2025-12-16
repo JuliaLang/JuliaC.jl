@@ -14,7 +14,9 @@
     @testset "Programmatic API (trim)" begin
         outdir = mktempdir()
         outname = joinpath(outdir, "lib")
-        link = JuliaC.LinkRecipe(image_recipe=img_lib, outname=outname)
+        # When bundling, set rpath to point to bundle's lib directory
+        bundle_rpath = Sys.iswindows() ? "bin" : joinpath("..", "lib")
+        link = JuliaC.LinkRecipe(image_recipe=img_lib, outname=outname, rpath=bundle_rpath)
         JuliaC.link_products(link)
         @test isfile(startswith(outname, "/") ? outname * "." * Base.BinaryPlatforms.platform_dlext() : joinpath(dirname(outname), basename(outname) * "." * Base.BinaryPlatforms.platform_dlext())) || isfile(outname)
 
@@ -46,7 +48,9 @@
         if Sys.isunix()
             outdir = mktempdir()
             libout = joinpath(outdir, "libprivtest")
-            link = JuliaC.LinkRecipe(image_recipe=img_lib, outname=libout)
+            # When bundling, set rpath to point to bundle's lib directory
+            bundle_rpath = joinpath("..", "lib")
+            link = JuliaC.LinkRecipe(image_recipe=img_lib, outname=libout, rpath=bundle_rpath)
             JuliaC.link_products(link)
             bun = JuliaC.BundleRecipe(link_recipe=link, output_dir=outdir, privatize=true)
             JuliaC.bundle_products(bun)
@@ -75,7 +79,9 @@
         if Sys.isunix()
             outdir = mktempdir()
             libout = joinpath(outdir, "libctest")
-            link = JuliaC.LinkRecipe(image_recipe=img_lib, outname=libout)
+            # When bundling, set rpath to point to bundle's lib directory
+            bundle_rpath = joinpath("..", "lib")
+            link = JuliaC.LinkRecipe(image_recipe=img_lib, outname=libout, rpath=bundle_rpath)
             JuliaC.link_products(link)
             bun = JuliaC.BundleRecipe(link_recipe=link, output_dir=outdir)
             JuliaC.bundle_products(bun)
@@ -99,7 +105,9 @@
         if Sys.isunix()
             outdir = mktempdir()
             libout = joinpath(outdir, "libjldlopentest")
-            link = JuliaC.LinkRecipe(image_recipe=img_lib, outname=libout)
+            # When bundling, set rpath to point to bundle's lib directory
+            bundle_rpath = joinpath("..", "lib")
+            link = JuliaC.LinkRecipe(image_recipe=img_lib, outname=libout, rpath=bundle_rpath)
             JuliaC.link_products(link)
             bun = JuliaC.BundleRecipe(link_recipe=link, output_dir=outdir, privatize=true)
             JuliaC.bundle_products(bun)
@@ -121,7 +129,9 @@
             outdir = mktempdir()
             libname = "libhassonametest"
             libout = joinpath(outdir, libname)
-            link = JuliaC.LinkRecipe(image_recipe=img_lib, outname=libout)
+            # When bundling, set rpath to point to bundle's lib directory
+            bundle_rpath = joinpath("..", "lib")
+            link = JuliaC.LinkRecipe(image_recipe=img_lib, outname=libout, rpath=bundle_rpath)
             JuliaC.link_products(link)
             bun = JuliaC.BundleRecipe(link_recipe=link, output_dir=outdir)
             JuliaC.bundle_products(bun)
@@ -139,7 +149,9 @@
             outdir = mktempdir()
             libname = "libhasinstallnametest"
             libout = joinpath(outdir, libname)
-            link = JuliaC.LinkRecipe(image_recipe=img_lib, outname=libout)
+            # When bundling, set rpath to point to bundle's lib directory
+            bundle_rpath = joinpath("..", "lib")
+            link = JuliaC.LinkRecipe(image_recipe=img_lib, outname=libout, rpath=bundle_rpath)
             JuliaC.link_products(link)
             bun = JuliaC.BundleRecipe(link_recipe=link, output_dir=outdir)
             JuliaC.bundle_products(bun)
@@ -158,7 +170,9 @@
             outdir = mktempdir()
             libname = "libhasimplibtest"
             libout = joinpath(outdir, libname)
-            link = JuliaC.LinkRecipe(image_recipe=img_lib, outname=libout)
+            # When bundling, set rpath to point to bundle's lib directory
+            bundle_rpath = "bin"
+            link = JuliaC.LinkRecipe(image_recipe=img_lib, outname=libout, rpath=bundle_rpath)
             JuliaC.link_products(link)
             bun = JuliaC.BundleRecipe(link_recipe=link, output_dir=outdir)
             JuliaC.bundle_products(bun)
@@ -181,7 +195,9 @@ end
         verbose = true,
     )
     JuliaC.compile_products(img)
-    link = JuliaC.LinkRecipe(image_recipe=img, outname=exeout)
+    # When bundling, set rpath to point to bundle's lib directory
+    bundle_rpath = Sys.iswindows() ? "bin" : joinpath("..", "lib")
+    link = JuliaC.LinkRecipe(image_recipe=img, outname=exeout, rpath=bundle_rpath)
     JuliaC.link_products(link)
     bun = JuliaC.BundleRecipe(link_recipe=link, output_dir=outdir)
     JuliaC.bundle_products(bun)
@@ -291,7 +307,9 @@ end
         verbose = true,
     )
     JuliaC.compile_products(img)
-    link = JuliaC.LinkRecipe(image_recipe=img, outname=exeout)
+    # When bundling, set rpath to point to bundle's lib directory
+    bundle_rpath = Sys.iswindows() ? "bin" : joinpath("..", "lib")
+    link = JuliaC.LinkRecipe(image_recipe=img, outname=exeout, rpath=bundle_rpath)
     JuliaC.link_products(link)
     bun = JuliaC.BundleRecipe(link_recipe=link, output_dir=outdir)
     JuliaC.bundle_products(bun)

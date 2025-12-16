@@ -1,7 +1,14 @@
 function get_rpath(recipe::LinkRecipe)
     if recipe.rpath === nothing
-        recipe.rpath = Sys.iswindows() ? "" : joinpath("..", "lib") # Default rpaths
+        # No bundling - use absolute paths to Julia installation's libraries
+        if Sys.iswindows()
+            return ""
+        end
+        libdir = JuliaConfig.libDir()
+        private_libdir = JuliaConfig.private_libDir()
+        return "-Wl,-rpath,'$(libdir)' -Wl,-rpath,'$(private_libdir)'"
     end
+    # Bundling case - use relative rpaths
     if Sys.isapple()
         base_token = "-Wl,-rpath,'@loader_path/"
     elseif Sys.islinux()
