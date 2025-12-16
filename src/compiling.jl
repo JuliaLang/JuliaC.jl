@@ -82,7 +82,7 @@ function compile_products(recipe::ImageRecipe)
     tmp_prefs_env = nothing
     if is_trim_enabled(recipe)
         load_path_sep = Sys.iswindows() ? ";" : ":"
-        # Create a temporary environment with a LocalPreferences.toml that will be added to JULIA_LOAD_PATH. 
+        # Create a temporary environment with a LocalPreferences.toml that will be added to JULIA_LOAD_PATH.
         tmp_prefs_env = mktempdir()
         open(joinpath(tmp_prefs_env, "Project.toml"), "w") do io
             println(io, "[extras]")
@@ -93,9 +93,9 @@ function compile_products(recipe::ImageRecipe)
             println(io, "[HostCPUFeatures]")
             println(io, "freeze_cpu_target = true")
         end
-        # Prepend the temp env to JULIA_LOAD_PATH
+        # Append the temp env to JULIA_LOAD_PATH
 
-        env_overrides["JULIA_LOAD_PATH"] = load_path_sep * tmp_prefs_env 
+        env_overrides["JULIA_LOAD_PATH"] = load_path_sep * tmp_prefs_env
     end
 
     inst_cmd = addenv(`$(Base.julia_cmd(cpu_target=precompile_cpu_target)) --project=$project_arg -e "using Pkg; Pkg.instantiate(); Pkg.precompile()"`, env_overrides...)
