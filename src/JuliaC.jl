@@ -31,10 +31,21 @@ Base.@kwdef mutable struct ImageRecipe
     export_abi::Union{String, Nothing} = nothing
 end
 
+"""
+Recipe for linking the compiled products into a single executable or library.
+
+The `rpath` field controls how the linker sets the runtime library search path.
+It accepts magic strings or custom paths:
+- `"@julia"` (default): Use absolute paths to the Julia installation's libraries.
+  This makes it easy to run demos without bundling.
+- `"@bundle"`: Use relative rpaths for the standard bundle layout (`../lib` on Unix, `bin` on Windows).
+  This is automatically set when using `--bundle` via the CLI.
+- Custom path (e.g., `"../lib"`): Use a custom relative rpath.
+"""
 Base.@kwdef mutable struct LinkRecipe
     image_recipe::ImageRecipe = ImageRecipe()
     outname::String = ""
-    rpath::Union{String, Nothing} = nothing
+    rpath::String = RPATH_JULIA
 end
 
 Base.@kwdef mutable struct BundleRecipe
@@ -162,13 +173,8 @@ function _parse_cli_args(args::Vector{String})
         if bundle_recipe.output_dir === nothing
             bundle_recipe.output_dir = abspath(dirname(link_recipe.outname))
         end
-        # When bundling, executables are placed in bin/ and libs in lib/ (Windows: all in bin)
-        # Set rpath relative to the executable location
-        if Sys.iswindows()
-            link_recipe.rpath = bundle_recipe.libdir
-        else
-            link_recipe.rpath = joinpath("..", bundle_recipe.libdir)
-        end
+        # Use @bundle magic string for standard bundle layout
+        link_recipe.rpath = RPATH_BUNDLE
     end
     return image_recipe, link_recipe, bundle_recipe
 end

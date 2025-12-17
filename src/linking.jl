@@ -1,6 +1,29 @@
+# Magic rpath strings:
+#   @julia  - Use absolute paths to the Julia installation's libraries (for non-bundled builds)
+#   @bundle - Use relative rpaths for standard bundle layout (../lib on Unix, bin on Windows)
+const RPATH_JULIA = "@julia"
+const RPATH_BUNDLE = "@bundle"
+
 function get_rpath(recipe::LinkRecipe)
-    if recipe.rpath === nothing
-        recipe.rpath = Sys.iswindows() ? "" : joinpath("..", "lib") # Default rpaths
+    rpath = recipe.rpath
+
+    # Handle @julia magic string - absolute paths to Julia installation
+    if rpath == RPATH_JULIA
+        if Sys.iswindows()
+            return ""
+        end
+        libdir = JuliaConfig.libDir()
+        private_libdir = JuliaConfig.private_libDir()
+        return "-Wl,-rpath,'$(libdir)' -Wl,-rpath,'$(private_libdir)'"
+    end
+
+    # Handle @bundle magic string - standard bundle layout
+    if rpath == RPATH_BUNDLE
+        if Sys.iswindows()
+            rpath = ""
+        else
+            rpath = joinpath("..", "lib")
+        end
     end
     if Sys.isapple()
         base_token = "-Wl,-rpath,'@loader_path/"
@@ -10,9 +33,9 @@ function get_rpath(recipe::LinkRecipe)
         @warn "get_rpath not implemented for this platform"
         return ""
     end
-    # If rpath is a relative subdir (e.g., "lib"), emit @loader_path/lib and @loader_path/lib/julia
-    priv_path = joinpath(recipe.rpath, "julia")
-    base_path = recipe.rpath
+    # Emit rpaths for both base path and julia subdirectory
+    priv_path = joinpath(rpath, "julia")
+    base_path = rpath
     flag1 = base_token * base_path * "'"
     flag2 = base_token * priv_path * "'"
     return string(flag1, " ", flag2)
