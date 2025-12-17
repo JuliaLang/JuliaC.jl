@@ -16,7 +16,8 @@ function bundle_products(recipe::BundleRecipe)
 
     # Create julia subdirectory for bundled libraries under lib/ (or bin/ on Windows)
     ctx2 = PackageCompiler.create_pkg_context(recipe.link_recipe.image_recipe.project)
-    stdlibs = unique(vcat(PackageCompiler.gather_stdlibs_project(ctx2), PackageCompiler.stdlibs_in_sysimage()))
+    stdlibs = unique(vcat(PackageCompiler.gather_stdlibs_project(ctx2),
+                          intersect(PackageCompiler._STDLIBS, map(x->x.name, Base._sysimage_modules))))
     PackageCompiler.bundle_julia_libraries(recipe.output_dir, stdlibs)
     PackageCompiler.bundle_artifacts(ctx2, recipe.output_dir; include_lazy_artifacts=false) # Lazy artifacts
 
