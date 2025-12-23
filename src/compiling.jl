@@ -78,7 +78,26 @@ function compile_products(recipe::ImageRecipe)
     end
 
     project_arg = recipe.project == "" ? Base.active_project() : recipe.project
-    env_overrides = Dict{String,Any}("JULIA_LOAD_PATH"=>nothing)
+    env_overrides = Dict{String,Any}()
+    tmp_prefs_env = nothing
+    if is_trim_enabled(recipe)
+        load_path_sep = Sys.iswindows() ? ";" : ":"
+        # Create a temporary environment with a LocalPreferences.toml that will be added to JULIA_LOAD_PATH.
+        tmp_prefs_env = mktempdir()
+        open(joinpath(tmp_prefs_env, "Project.toml"), "w") do io
+            println(io, "[extras]")
+            println(io, "HostCPUFeatures = \"3e5b6fbb-0976-4d2c-9146-d79de83f2fb0\"")
+        end
+        # Write LocalPreferences.toml with the trim preferences
+        open(joinpath(tmp_prefs_env, "LocalPreferences.toml"), "w") do io
+            println(io, "[HostCPUFeatures]")
+            println(io, "freeze_cpu_target = true")
+        end
+        # Append the temp env to JULIA_LOAD_PATH
+
+        env_overrides["JULIA_LOAD_PATH"] = load_path_sep * tmp_prefs_env
+    end
+
     inst_cmd = addenv(`$(Base.julia_cmd(cpu_target=precompile_cpu_target)) --project=$project_arg -e "using Pkg; Pkg.instantiate(); Pkg.precompile()"`, env_overrides...)
     recipe.verbose && println("Running: $inst_cmd")
     precompile_time = time_ns()
