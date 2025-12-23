@@ -20,6 +20,7 @@ function bundle_products(recipe::BundleRecipe)
                           intersect(PackageCompiler._STDLIBS, map(x->x.name, Base._sysimage_modules))))
     PackageCompiler.bundle_julia_libraries(recipe.output_dir, stdlibs)
     PackageCompiler.bundle_artifacts(ctx2, recipe.output_dir; include_lazy_artifacts=false) # Lazy artifacts
+    PackageCompiler.bundle_cert(recipe.output_dir) # SSL certificates
 
     # Re-home bundled libraries into the desired bundle layout
     libdir = recipe.libdir
