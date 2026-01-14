@@ -167,6 +167,59 @@
             @test isfile(implibpath)
         end
     end
+
+    # https://github.com/JuliaLang/JuliaC.jl/pull/69
+    @testset "`ld_flags` passes flags to compiler (Linux + MacOS)" begin
+        if Sys.islinux() || Sys.isapple() 
+            outdir = mktempdir()
+            libname = "libhasdebugtest"
+            libout = joinpath(outdir, libname)
+            rpath = "this/tests/ld/flags/"
+            link = JuliaC.LinkRecipe(
+                image_recipe=img_lib,
+                outname=libout,
+                ld_flags=["-Wl,-rpath,$(rpath)"]
+            )
+            JuliaC.link_products(link)
+            bun = JuliaC.BundleRecipe(link_recipe=link, output_dir=outdir)
+            JuliaC.bundle_products(bun)
+
+            libfile_name = libname * "." * Base.BinaryPlatforms.platform_dlext()
+            libpath = joinpath(outdir, "lib", libfile_name)
+            output = if Sys.islinux()
+                readchomp(`$(Patchelf_jll.patchelf()) --print-rpath $(libpath)`)
+            else
+                output = readchomp(`otool -l $(libpath)`)
+            end
+            @test occursin(rpath, output)
+        end
+    end
+
+    # https://github.com/JuliaLang/JuliaC.jl/pull/69
+    @testset "`ld_flags` passes flags to compiler (Windows)" begin
+        if Sys.iswindows()
+            outdir = mktempdir()
+            libname = "libhasdebugtest"
+            libout = joinpath(outdir, libname)
+            link = JuliaC.LinkRecipe(
+                image_recipe=img_lib,
+                outname=libout,
+                ld_flags=[
+                    "-Wl,--major-image-version,32767",
+                    "-Wl,--minor-image-version,32767"
+                ]
+            )
+            JuliaC.link_products(link)
+            bun = JuliaC.BundleRecipe(link_recipe=link, output_dir=outdir)
+            JuliaC.bundle_products(bun)
+
+            libfile_name = libname * "." * Base.BinaryPlatforms.platform_dlext()
+            libpath = joinpath(outdir, "bin", libfile_name)
+            output = read(`objdump -p $(libpath)`, String)
+            @test occursin(r"MajorImageVersion\s+32767", output)
+            @test occursin(r"MinorImageVersion\s+32767", output)
+        end
+    end
 end
 
 @testset "Programmatic binary (trim)" begin
