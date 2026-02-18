@@ -60,6 +60,11 @@ function compile_products(recipe::ImageRecipe)
     if recipe.output_type == "--output-lib" && recipe.add_ccallables == false
         recipe.add_ccallables = true
     end
+    # Default: disable signal handlers and limit to single thread for shared libraries
+    if recipe.output_type == "--output-lib" && isempty(recipe.jl_options)
+        recipe.jl_options["handle-signals"] = "no"
+        recipe.jl_options["threads"] = "1"
+    end
     if recipe.cpu_target === nothing
         recipe.cpu_target = get(ENV,"JULIA_CPU_TARGET", nothing)
     end
@@ -183,4 +188,137 @@ function compile_products(recipe::ImageRecipe)
             end
         end
     end
+    # Generate and compile a C shim that sets jl_options fields via constructor
+    if !isempty(recipe.jl_options)
+        _validate_jl_options(recipe.jl_options)
+        obj = _compile_jl_options_shim(recipe.jl_options; verbose=recipe.verbose)
+        push!(recipe.extra_objects, obj)
+    end
+end
+
+const _SUPPORTED_JL_OPTIONS = Set([
+    "handle-signals",
+    "threads",
+])
+
+"""
+Validate that all keys in `jl_options` are supported option names.
+Option names match Julia CLI flags (e.g. `handle-signals`, `threads`).
+"""
+function _validate_jl_options(jl_options::Dict{String,String})
+    for key in keys(jl_options)
+        if key ∉ _SUPPORTED_JL_OPTIONS
+            error("Unsupported jl_options key: \"$key\". Supported keys are: $(join(sort(collect(_SUPPORTED_JL_OPTIONS)), ", "))")
+        end
+    end
+end
+
+"""
+Parse `--jl-option handle-signals=yes|no` into C assignments.
+Mirrors Julia's `--handle-signals` parsing in `jloptions.c`.
+"""
+function _emit_handle_signals(io::IO, value::String)
+    if value == "yes"
+        println(io, "opts->handle_signals = JL_OPTIONS_HANDLE_SIGNALS_ON;")
+    elseif value == "no"
+        println(io, "opts->handle_signals = JL_OPTIONS_HANDLE_SIGNALS_OFF;")
+    else
+        error("Invalid value for handle-signals: \"$value\". Expected \"yes\" or \"no\".")
+    end
+end
+
+"""
+Parse `--jl-option threads=N[,M]` into C assignments.
+Mirrors Julia's `--threads` / `-t` parsing in `jloptions.c`:
+- `N` → N threads in default pool; if N==1, 1 pool; else 2 pools (+ 1 interactive)
+- `N,M` → N default + M interactive; if M==0, 1 pool; else 2 pools
+- `N,auto` → N default + 1 interactive, 2 pools
+
+Does not support `auto` for N (libraries should specify a concrete thread count).
+"""
+function _emit_threads(io::IO, value::String)
+    parts = split(value, ','; limit=2)
+    nthreads_str = parts[1]
+    nthreads_str == "auto" && error("\"auto\" is not supported for threads in --jl-option; specify a concrete count.")
+    nthreads = tryparse(Int, nthreads_str)
+    nthreads === nothing && error("Invalid thread count: \"$nthreads_str\"")
+    nthreads < 1 && error("Thread count must be >= 1, got $nthreads")
+
+    if length(parts) == 2
+        # N,M or N,auto
+        ipart = parts[2]
+        if ipart == "auto"
+            nthreadsi = 1
+        else
+            nthreadsi = tryparse(Int, ipart)
+            nthreadsi === nothing && error("Invalid interactive thread count: \"$ipart\"")
+            nthreadsi < 0 && error("Interactive thread count must be >= 0, got $nthreadsi")
+        end
+    elseif nthreads == 1
+        # Like Julia: 1 thread → no interactive pool
+        nthreadsi = 0
+    else
+        # Like Julia: N>1 → add 1 interactive thread
+        nthreadsi = 1
+    end
+
+    nthreadpools = nthreadsi == 0 ? 1 : 2
+    total = nthreads + nthreadsi
+
+    println(io, "opts->nthreads = $total;")
+    println(io, "opts->nthreadpools = $nthreadpools;")
+    println(io, "{")
+    println(io, "    int16_t *ntpp = (int16_t *)malloc($nthreadpools * sizeof(int16_t));")
+    println(io, "    if (ntpp) {")
+    println(io, "        ntpp[0] = (int16_t)$nthreads;")
+    if nthreadpools == 2
+        println(io, "        ntpp[1] = (int16_t)$nthreadsi;")
+    end
+    println(io, "        opts->nthreads_per_pool = ntpp;")
+    println(io, "    }")
+    println(io, "}")
+end
+
+"""
+Generate and compile a C shim that overrides `jl_options` fields via an
+`__attribute__((constructor))`.
+
+The boilerplate C code lives in `scripts/juliac-jl-options-shim.c` and
+`#include`s a generated `juliac-jl-options-body.h` containing just the
+option assignments.  See the shim source for how `jl_options` is resolved
+on each platform.
+
+Returns the path to the compiled object file.
+"""
+function _compile_jl_options_shim(jl_options::Dict{String,String}; verbose::Bool=false)
+    compiler_cmd = JuliaC.get_compiler_cmd()
+    default_cflags = Base.shell_split(JuliaC.JuliaConfig.cflags(; framework=false))
+    tmpdir = mktempdir()
+    shim_src = joinpath(JuliaC.SCRIPTS_DIR, "juliac-jl-options-shim.c")
+    body_hdr = joinpath(tmpdir, "juliac-jl-options-body.h")
+    init_obj = joinpath(tmpdir, "juliac-jl-options-init.o")
+    # Generate only the option-assignment body
+    open(body_hdr, "w") do io
+        println(io, "/* Generated by JuliaC — jl_options field assignments */")
+        if haskey(jl_options, "handle-signals")
+            _emit_handle_signals(io, jl_options["handle-signals"])
+        end
+        if haskey(jl_options, "threads")
+            _emit_threads(io, jl_options["threads"])
+        end
+    end
+    verbose && println("Generated jl_options body: $body_hdr")
+    # Compile the template shim with -I pointing at the generated body
+    cmdc = compiler_cmd
+    for cf in default_cflags
+        cmdc = `$cmdc $cf`
+    end
+    cmdc = `$cmdc -I$tmpdir -c $shim_src -o $init_obj`
+    verbose && println("Running: $cmdc")
+    try
+        run(cmdc)
+    catch e
+        error("jl_options init shim compilation failed: ", e)
+    end
+    return init_obj
 end
