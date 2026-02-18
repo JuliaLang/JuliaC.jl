@@ -14,6 +14,8 @@
  * "juliac-jl-options-body.h".
  */
 
+#define _GNU_SOURCE
+
 #include <julia.h>
 #include <stdlib.h>
 
