@@ -3,9 +3,13 @@
  *
  * Sets jl_options fields before jl_init via __attribute__((constructor)).
  *
- * On Unix, we use dladdr/dlsym (like jl_find_dynamic_library_by_addr) to
- * resolve jl_options from our own libjulia dependency rather than a host
- * Julia's copy in the global symbol namespace.
+ * On macOS, dlsym with a handle from dlopen searches that image and its
+ * dependencies, so we use dladdr/dlopen/dlsym to resolve jl_options from
+ * our own libjulia dependency.
+ *
+ * On Linux, dlopen(RTLD_NOLOAD) on the main executable returns NULL, so
+ * we use RTLD_DEFAULT which searches all loaded shared objects. This is
+ * safe because our libjulia is the only one loaded at constructor time.
  *
  * On Windows, DLL import resolution is per-module, so &jl_options already
  * resolves to the correct instance from our libjulia dependency.
@@ -29,13 +33,17 @@ __attribute__((constructor))
 static void juliac_set_jl_options(void) {
 #ifdef _WIN32
     jl_options_t *opts = &jl_options;
-#else
+#elif defined(__APPLE__)
     Dl_info info;
     if (!dladdr((void *)&juliac_set_jl_options, &info)) return;
     void *self = dlopen(info.dli_fname, RTLD_NOLOAD | RTLD_NOW);
     if (!self) return;
     jl_options_t *opts = (jl_options_t *)dlsym(self, "jl_options");
     dlclose(self);
+    if (!opts) return;
+#else
+    /* Linux: RTLD_DEFAULT searches all loaded shared objects */
+    jl_options_t *opts = (jl_options_t *)dlsym(RTLD_DEFAULT, "jl_options");
     if (!opts) return;
 #endif
 
