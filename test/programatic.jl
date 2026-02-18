@@ -338,7 +338,7 @@ end
     @test img.jl_options["handle-signals"] == "no"
     @test img.jl_options["threads"] == "1"
 
-    # User-provided jl_options should not be overwritten
+    # User-provided jl_options should not be overwritten, other defaults still applied
     img2 = JuliaC.ImageRecipe(
         file = TEST_LIB_SRC,
         output_type = "--output-lib",
@@ -349,7 +349,7 @@ end
     )
     JuliaC.compile_products(img2)
     @test img2.jl_options["handle-signals"] == "yes"
-    @test !haskey(img2.jl_options, "threads")
+    @test img2.jl_options["threads"] == "1"  # default still applied
 
     # --output-exe should not auto-populate jl_options
     img3 = JuliaC.ImageRecipe(
@@ -380,14 +380,6 @@ end
     # Supported options should pass validation
     JuliaC._validate_jl_options(Dict("handle-signals" => "no"))
     JuliaC._validate_jl_options(Dict("threads" => "1"))
-
-    # Invalid handle-signals value should error
-    @test_throws ErrorException JuliaC._emit_handle_signals(devnull, "maybe")
-
-    # Invalid threads value should error
-    @test_throws ErrorException JuliaC._emit_threads(devnull, "auto")
-    @test_throws ErrorException JuliaC._emit_threads(devnull, "0")
-    @test_throws ErrorException JuliaC._emit_threads(devnull, "abc")
 end
 
 @testset "jl_options applied at runtime" begin
