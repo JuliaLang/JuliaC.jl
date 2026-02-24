@@ -324,6 +324,142 @@ end
     @test_throws ErrorException JuliaC.bundle_products(bun)
 end
 
+@testset "jl_options defaults for libraries" begin
+    # --output-lib should auto-populate jl_options when empty
+    img = JuliaC.ImageRecipe(
+        file = TEST_LIB_SRC,
+        output_type = "--output-lib",
+        project = TEST_LIB_PROJ,
+        trim_mode = "safe",
+        verbose = false,
+    )
+    @test isempty(img.jl_options)
+    JuliaC.compile_products(img)
+    @test img.jl_options["handle-signals"] == "no"
+    @test img.jl_options["threads"] == "1"
+
+    # User-provided jl_options should not be overwritten, other defaults still applied
+    img2 = JuliaC.ImageRecipe(
+        file = TEST_LIB_SRC,
+        output_type = "--output-lib",
+        project = TEST_LIB_PROJ,
+        trim_mode = "safe",
+        verbose = false,
+        jl_options = Dict("handle-signals" => "yes"),
+    )
+    JuliaC.compile_products(img2)
+    @test img2.jl_options["handle-signals"] == "yes"
+    @test img2.jl_options["threads"] == "1"  # default still applied
+
+    # --output-exe should not auto-populate jl_options
+    img3 = JuliaC.ImageRecipe(
+        file = TEST_SRC,
+        output_type = "--output-exe",
+        project = TEST_PROJ,
+        trim_mode = "safe",
+        verbose = false,
+    )
+    JuliaC.compile_products(img3)
+    @test isempty(img3.jl_options)
+end
+
+@testset "jl_options validation" begin
+    # Unknown option name should error
+    img = JuliaC.ImageRecipe(
+        file = TEST_LIB_SRC,
+        output_type = "--output-lib",
+        project = TEST_LIB_PROJ,
+        trim_mode = "safe",
+        jl_options = Dict("bogus_field" => "42"),
+    )
+    @test_throws ErrorException JuliaC.compile_products(img)
+
+    # Unsupported (but real struct field) should also error
+    @test_throws ErrorException JuliaC._validate_jl_options(Dict("opt_level" => "2"))
+
+    # Supported options should pass validation
+    JuliaC._validate_jl_options(Dict("handle-signals" => "no"))
+    JuliaC._validate_jl_options(Dict("threads" => "1"))
+end
+
+@testset "jl_options applied at runtime" begin
+    # Compile an executable with --jl-option and verify the options take effect
+    jlopts_src = joinpath(@__DIR__, "jloptions_check.jl")
+    outdir = mktempdir()
+    exeout = joinpath(outdir, "jlopts_exe")
+    img = JuliaC.ImageRecipe(
+        file = jlopts_src,
+        output_type = "--output-exe",
+        project = TEST_PROJ,
+        trim_mode = "safe",
+        verbose = true,
+        jl_options = Dict(
+            "handle-signals" => "no",
+            "threads" => "1",
+        ),
+    )
+    JuliaC.compile_products(img)
+    link = JuliaC.LinkRecipe(image_recipe=img, outname=exeout, rpath=JuliaC.RPATH_BUNDLE)
+    JuliaC.link_products(link)
+    bun = JuliaC.BundleRecipe(link_recipe=link, output_dir=outdir)
+    JuliaC.bundle_products(bun)
+    actual_exe = Sys.iswindows() ? joinpath(outdir, "bin", basename(exeout) * ".exe") : joinpath(outdir, "bin", basename(exeout))
+    @test isfile(actual_exe)
+    output = read(`$actual_exe`, String)
+    # JL_OPTIONS_HANDLE_SIGNALS_OFF == 0
+    @test occursin("handle_signals=0", output)
+    @test occursin("nthreads=1", output)
+    @test occursin("nthreadpools=1", output)
+end
+
+@testset "jl_options applied at runtime (library)" begin
+    if Sys.isunix()
+        jlopts_lib_src = joinpath(@__DIR__, "lib_jloptions_check.jl")
+        outdir = mktempdir()
+        libout = joinpath(outdir, "libjloptscheck")
+        # Compile as library — auto-populates handle-signals and threads defaults
+        img = JuliaC.ImageRecipe(
+            file = jlopts_lib_src,
+            output_type = "--output-lib",
+            project = TEST_LIB_PROJ,
+            add_ccallables = true,
+            trim_mode = "safe",
+            verbose = true,
+        )
+        JuliaC.compile_products(img)
+        link = JuliaC.LinkRecipe(image_recipe=img, outname=libout, rpath=JuliaC.RPATH_BUNDLE)
+        JuliaC.link_products(link)
+        bun = JuliaC.BundleRecipe(link_recipe=link, output_dir=outdir, privatize=true)
+        JuliaC.bundle_products(bun)
+
+        dlext = Base.BinaryPlatforms.platform_dlext()
+        libpath = joinpath(outdir, "lib", basename(libout) * "." * dlext)
+        @test isfile(libpath)
+
+        # dlopen from a fresh Julia process and call the exported functions
+        lib_literal = repr(libpath)
+        julia_snippet = """
+            using Libdl
+            h = Libdl.dlopen($lib_literal, Libdl.RTLD_LOCAL)
+            try
+                hs = ccall(Libdl.dlsym(h, :jc_get_handle_signals), Cint, ())
+                nt = ccall(Libdl.dlsym(h, :jc_get_nthreads), Cint, ())
+                np = ccall(Libdl.dlsym(h, :jc_get_nthreadpools), Cint, ())
+                println("handle_signals=", hs)
+                println("nthreads=", nt)
+                println("nthreadpools=", np)
+            finally
+                try Libdl.dlclose(h) catch end
+            end
+        """
+        out = read(`$(Base.julia_cmd()) --startup-file=no --history-file=no -e $julia_snippet`, String)
+        # JL_OPTIONS_HANDLE_SIGNALS_OFF == 0
+        @test occursin("handle_signals=0", out)
+        @test occursin("nthreads=1", out)
+        @test occursin("nthreadpools=1", out)
+    end
+end
+
 @testset "Project as File" begin
     outdir = mktempdir()
     exeout = joinpath(outdir, "prog_exe_projfile")

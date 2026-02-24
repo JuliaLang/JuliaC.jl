@@ -29,6 +29,10 @@ Base.@kwdef mutable struct ImageRecipe
     cflags::Vector{String} = String[]
     extra_objects::Vector{String} = String[]
     export_abi::Union{String, Nothing} = nothing
+    # Julia CLI option overrides applied via jl_parse_opts in a constructor before jl_init.
+    # Keys and values use Julia CLI syntax (e.g. "handle-signals" => "no", "threads" => "1").
+    # Auto-populated with safe defaults for --output-lib.
+    jl_options::Dict{String,String} = Dict{String,String}()
 end
 
 """
@@ -90,6 +94,7 @@ function _print_usage(io::IO=stdout)
     println(io, "  --privatize                 Privatize bundled libjulia (Unix)")
     println(io, "  --trim[=mode]               Strip IR/metadata (e.g. --trim=safe)")
     println(io, "  --compile-ccallable         Export ccallable entrypoints")
+    println(io, "  --jl-option <key=value>     Set a Julia option using CLI syntax (supported: handle-signals, threads)")
     println(io, "  --export-abi <file>         Emit type / function information for the ABI (in JSON format)")
     println(io, "  --experimental              Forwarded to Julia (needed for --trim)")
     println(io, "  --verbose                   Print commands and timings")
@@ -135,6 +140,17 @@ function _parse_cli_args(args::Vector{String})
             push!(image_recipe.julia_args, arg)
         elseif arg == "--compile-ccallable"
             image_recipe.add_ccallables = true
+        elseif startswith(arg, "--jl-option")
+            if startswith(arg, "--jl-option=")
+                kv = split(arg, '='; limit=2)[2]
+            else
+                i == length(args) && error("--jl-option requires a key=value argument")
+                kv = args[i+1]
+                i += 1
+            end
+            occursin('=', kv) || error("--jl-option expects key=value, got: $kv")
+            k, v = split(kv, '='; limit=2)
+            image_recipe.jl_options[String(k)] = String(v)
         elseif arg == "--export-abi"
             i == length(args) && error("--export-abi requires an argument")
             image_recipe.export_abi = args[i+1]

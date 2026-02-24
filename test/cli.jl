@@ -193,6 +193,43 @@ end
     @test link3.rpath == JuliaC.RPATH_JULIA  # Should use @julia when not bundling
     @test bun3.output_dir === nothing  # No bundling
 
+    # --jl-option with space separator
+    args_jlopt = String[
+        "--output-lib", joinpath(mktempdir(), "mylib"),
+        "--jl-option", "handle-signals=no",
+        TEST_LIB_SRC,
+    ]
+    img_jlopt, _, _ = JuliaC._parse_cli_args(args_jlopt)
+    @test img_jlopt.jl_options["handle-signals"] == "no"
+
+    # --jl-option= with equals separator
+    args_jlopt2 = String[
+        "--output-lib", joinpath(mktempdir(), "mylib"),
+        "--jl-option=threads=4",
+        TEST_LIB_SRC,
+    ]
+    img_jlopt2, _, _ = JuliaC._parse_cli_args(args_jlopt2)
+    @test img_jlopt2.jl_options["threads"] == "4"
+
+    # Multiple --jl-option flags
+    args_jlopt3 = String[
+        "--output-lib", joinpath(mktempdir(), "mylib"),
+        "--jl-option", "handle-signals=no",
+        "--jl-option=threads=4,2",
+        TEST_LIB_SRC,
+    ]
+    img_jlopt3, _, _ = JuliaC._parse_cli_args(args_jlopt3)
+    @test img_jlopt3.jl_options["handle-signals"] == "no"
+    @test img_jlopt3.jl_options["threads"] == "4,2"
+
+    # --jl-option missing value
+    @test_throws ErrorException JuliaC._parse_cli_args(String[
+        "--output-lib", joinpath(mktempdir(), "mylib"), TEST_LIB_SRC, "--jl-option"])
+
+    # --jl-option missing = in value
+    @test_throws ErrorException JuliaC._parse_cli_args(String[
+        "--output-lib", joinpath(mktempdir(), "mylib"), TEST_LIB_SRC, "--jl-option", "badvalue"])
+
     # Errors: unknown option
     @test_throws ErrorException JuliaC._parse_cli_args(String["--unknown"])
 
@@ -227,6 +264,7 @@ end
     @test occursin("--bundle", out)
     @test occursin("--trim", out)
     @test occursin("--compile-ccallable", out)
+    @test occursin("--jl-option", out)
     @test occursin("--experimental", out)
     @test occursin("--verbose", out)
     @test occursin("--help", out)
