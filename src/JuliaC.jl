@@ -29,9 +29,9 @@ Base.@kwdef mutable struct ImageRecipe
     cflags::Vector{String} = String[]
     extra_objects::Vector{String} = String[]
     export_abi::Union{String, Nothing} = nothing
-    # jl_options overrides applied via __attribute__((constructor)) before jl_init.
-    # Keys are jl_options_t field names, values are C expressions.
-    # Auto-populated for --output-lib to disable signal handlers and limit threading.
+    # Julia CLI option overrides applied via jl_parse_opts in a constructor before jl_init.
+    # Keys and values use Julia CLI syntax (e.g. "handle-signals" => "no", "threads" => "1").
+    # Auto-populated with safe defaults for --output-lib.
     jl_options::Dict{String,String} = Dict{String,String}()
 end
 
@@ -94,7 +94,7 @@ function _print_usage(io::IO=stdout)
     println(io, "  --privatize                 Privatize bundled libjulia (Unix)")
     println(io, "  --trim[=mode]               Strip IR/metadata (e.g. --trim=safe)")
     println(io, "  --compile-ccallable         Export ccallable entrypoints")
-    println(io, "  --jl-option <key=value>     Set a jl_options field (e.g. --jl-option handle-signals=no, --jl-option threads=4)")
+    println(io, "  --jl-option <key=value>     Set a Julia option using CLI syntax (supported: handle-signals, threads)")
     println(io, "  --export-abi <file>         Emit type / function information for the ABI (in JSON format)")
     println(io, "  --experimental              Forwarded to Julia (needed for --trim)")
     println(io, "  --verbose                   Print commands and timings")
