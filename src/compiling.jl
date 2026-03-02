@@ -188,12 +188,13 @@ function compile_products(recipe::ImageRecipe)
             end
         end
     end
-    # Generate and compile a C shim that sets jl_options fields via constructor
+    # Always compile the jl_options shim so that jl_parse_opts runs
+    # consistently, even when no explicit options are provided.
     if !isempty(recipe.jl_options)
         _validate_jl_options(recipe.jl_options)
-        obj = _compile_jl_options_shim(recipe.jl_options; verbose=recipe.verbose)
-        push!(recipe.extra_objects, obj)
     end
+    obj = _compile_jl_options_shim(recipe.jl_options; verbose=recipe.verbose)
+    push!(recipe.extra_objects, obj)
 end
 
 const _SUPPORTED_JL_OPTIONS = Set([
@@ -255,15 +256,19 @@ function _compile_jl_options_shim(jl_options::Dict{String,String}; verbose::Bool
         error("jl_options init shim compilation failed: ", e)
     end
     # Validate by running julia with the same flags.
-    julia_bin = joinpath(Sys.BINDIR, "julia")
-    validate_cmd = `$julia_bin`
-    for (key, value) in jl_options
-        validate_cmd = `$validate_cmd --$(key)=$(value)`
-    end
-    validate_cmd = `$validate_cmd -e ""`
-    verbose && println("Validating jl_options: $validate_cmd")
-    if !success(pipeline(validate_cmd; stdout=devnull, stderr))
-        error("Invalid --jl-option values. Check that option values match Julia CLI syntax (e.g. --handle-signals=yes|no, --threads=N[,M]).")
+    if !isempty(jl_options)
+        julia_bin = joinpath(Sys.BINDIR, "julia")
+        validate_cmd = `$julia_bin`
+        for (key, value) in jl_options
+            validate_cmd = `$validate_cmd --$(key)=$(value)`
+        end
+        validate_cmd = `$validate_cmd -e ""`
+        verbose && println("Validating jl_options: $validate_cmd")
+        errbuf = IOBuffer()
+        if !success(pipeline(validate_cmd; stdout=devnull, stderr=errbuf))
+            errmsg = String(take!(errbuf))
+            error("Invalid --jl-option values: $(strip(errmsg))")
+        end
     end
     return init_obj
 end

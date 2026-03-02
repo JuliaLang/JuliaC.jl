@@ -413,51 +413,50 @@ end
 end
 
 @testset "jl_options applied at runtime (library)" begin
-    if Sys.isunix()
-        jlopts_lib_src = joinpath(@__DIR__, "lib_jloptions_check.jl")
-        outdir = mktempdir()
-        libout = joinpath(outdir, "libjloptscheck")
-        # Compile as library — auto-populates handle-signals and threads defaults
-        img = JuliaC.ImageRecipe(
-            file = jlopts_lib_src,
-            output_type = "--output-lib",
-            project = TEST_LIB_PROJ,
-            add_ccallables = true,
-            trim_mode = "safe",
-            verbose = true,
-        )
-        JuliaC.compile_products(img)
-        link = JuliaC.LinkRecipe(image_recipe=img, outname=libout, rpath=JuliaC.RPATH_BUNDLE)
-        JuliaC.link_products(link)
-        bun = JuliaC.BundleRecipe(link_recipe=link, output_dir=outdir, privatize=true)
-        JuliaC.bundle_products(bun)
+    jlopts_lib_src = joinpath(@__DIR__, "lib_jloptions_check.jl")
+    outdir = mktempdir()
+    libout = joinpath(outdir, "libjloptscheck")
+    # Compile as library — auto-populates handle-signals and threads defaults
+    img = JuliaC.ImageRecipe(
+        file = jlopts_lib_src,
+        output_type = "--output-lib",
+        project = TEST_LIB_PROJ,
+        add_ccallables = true,
+        trim_mode = "safe",
+        verbose = true,
+    )
+    JuliaC.compile_products(img)
+    link = JuliaC.LinkRecipe(image_recipe=img, outname=libout, rpath=JuliaC.RPATH_BUNDLE)
+    JuliaC.link_products(link)
+    bun = JuliaC.BundleRecipe(link_recipe=link, output_dir=outdir, privatize=true)
+    JuliaC.bundle_products(bun)
 
-        dlext = Base.BinaryPlatforms.platform_dlext()
-        libpath = joinpath(outdir, "lib", basename(libout) * "." * dlext)
-        @test isfile(libpath)
+    dlext = Base.BinaryPlatforms.platform_dlext()
+    libroot = Sys.iswindows() ? "bin" : "lib"
+    libpath = joinpath(outdir, libroot, basename(libout) * "." * dlext)
+    @test isfile(libpath)
 
-        # dlopen from a fresh Julia process and call the exported functions
-        lib_literal = repr(libpath)
-        julia_snippet = """
-            using Libdl
-            h = Libdl.dlopen($lib_literal, Libdl.RTLD_LOCAL)
-            try
-                hs = ccall(Libdl.dlsym(h, :jc_get_handle_signals), Cint, ())
-                nt = ccall(Libdl.dlsym(h, :jc_get_nthreads), Cint, ())
-                np = ccall(Libdl.dlsym(h, :jc_get_nthreadpools), Cint, ())
-                println("handle_signals=", hs)
-                println("nthreads=", nt)
-                println("nthreadpools=", np)
-            finally
-                try Libdl.dlclose(h) catch end
-            end
-        """
-        out = read(`$(Base.julia_cmd()) --startup-file=no --history-file=no -e $julia_snippet`, String)
-        # JL_OPTIONS_HANDLE_SIGNALS_OFF == 0
-        @test occursin("handle_signals=0", out)
-        @test occursin("nthreads=1", out)
-        @test occursin("nthreadpools=1", out)
-    end
+    # dlopen from a fresh Julia process and call the exported functions
+    lib_literal = repr(libpath)
+    julia_snippet = """
+        using Libdl
+        h = Libdl.dlopen($lib_literal, Libdl.RTLD_LOCAL)
+        try
+            hs = ccall(Libdl.dlsym(h, :jc_get_handle_signals), Cint, ())
+            nt = ccall(Libdl.dlsym(h, :jc_get_nthreads), Cint, ())
+            np = ccall(Libdl.dlsym(h, :jc_get_nthreadpools), Cint, ())
+            println("handle_signals=", hs)
+            println("nthreads=", nt)
+            println("nthreadpools=", np)
+        finally
+            try Libdl.dlclose(h) catch end
+        end
+    """
+    out = read(`$(Base.julia_cmd()) --startup-file=no --history-file=no -e $julia_snippet`, String)
+    # JL_OPTIONS_HANDLE_SIGNALS_OFF == 0
+    @test occursin("handle_signals=0", out)
+    @test occursin("nthreads=1", out)
+    @test occursin("nthreadpools=1", out)
 end
 
 @testset "Project as File" begin
