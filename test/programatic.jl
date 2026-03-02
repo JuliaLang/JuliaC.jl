@@ -428,7 +428,7 @@ end
     JuliaC.compile_products(img)
     link = JuliaC.LinkRecipe(image_recipe=img, outname=libout, rpath=JuliaC.RPATH_BUNDLE)
     JuliaC.link_products(link)
-    bun = JuliaC.BundleRecipe(link_recipe=link, output_dir=outdir, privatize=true)
+    bun = JuliaC.BundleRecipe(link_recipe=link, output_dir=outdir)
     JuliaC.bundle_products(bun)
 
     dlext = Base.BinaryPlatforms.platform_dlext()
@@ -436,23 +436,19 @@ end
     libpath = joinpath(outdir, libroot, basename(libout) * "." * dlext)
     @test isfile(libpath)
 
-    # dlopen from a fresh Julia process and call the exported functions
-    lib_literal = repr(libpath)
-    julia_snippet = """
-        using Libdl
-        h = Libdl.dlopen($lib_literal, Libdl.RTLD_LOCAL)
-        try
-            hs = ccall(Libdl.dlsym(h, :jc_get_handle_signals), Cint, ())
-            nt = ccall(Libdl.dlsym(h, :jc_get_nthreads), Cint, ())
-            np = ccall(Libdl.dlsym(h, :jc_get_nthreadpools), Cint, ())
-            println("handle_signals=", hs)
-            println("nthreads=", nt)
-            println("nthreadpools=", np)
-        finally
-            try Libdl.dlclose(h) catch end
-        end
-    """
-    out = read(`$(Base.julia_cmd()) --startup-file=no --history-file=no -e $julia_snippet`, String)
+    # Compile a small C driver that dlopens the library and queries jl_options
+    csrc = abspath(joinpath(@__DIR__, "c", "ctest_jloptions.c"))
+    bindir = joinpath(outdir, "bin")
+    mkpath(bindir)
+    exe = joinpath(bindir, Sys.iswindows() ? "ctest_jloptions.exe" : "ctest_jloptions")
+    cc = JuliaC.get_compiler_cmd()
+    if Sys.islinux()
+        run(`$cc -o $exe $csrc -ldl`)
+    else
+        run(`$cc -o $exe $csrc`)
+    end
+
+    out = read(`$exe $libpath`, String)
     # JL_OPTIONS_HANDLE_SIGNALS_OFF == 0
     @test occursin("handle_signals=0", out)
     @test occursin("nthreads=1", out)
