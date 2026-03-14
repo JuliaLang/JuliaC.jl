@@ -276,3 +276,22 @@ end
     @test String(take!(io)) ==
         "juliac version $(pkgversion(JuliaC)), julia version $(VERSION)\n"
 end
+
+# Regression test: linking with --cpu-target=generic must succeed when
+# the compiled code references transcendental math functions (sin, cos, …)
+# that live in libm on Linux.  Without -lm in the link command this fails
+# with unresolved symbols.
+if Sys.islinux()
+    @testset "CLI app with math and --cpu-target=generic" begin
+        math_proj = abspath(joinpath(@__DIR__, "MathApp"))
+        outdir = mktempdir()
+        # Force generic CPU target to trigger libm symbol references
+        withenv("JULIA_CPU_TARGET" => "generic") do
+            run_juliac_cli(["--output-exe", "mathapp", "--trim", math_proj, "--bundle", outdir])
+        end
+        actual_exe = joinpath(outdir, "bin", "mathapp")
+        @test isfile(actual_exe)
+        output = read(`$actual_exe 1.0`, String)
+        @test occursin("sin(1.0) = ", output)
+    end
+end
