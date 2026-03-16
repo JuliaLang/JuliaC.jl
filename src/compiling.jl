@@ -128,7 +128,6 @@ function compile_products(recipe::ImageRecipe)
         tmpdir = mktempdir()
         recipe.img_path = joinpath(tmpdir, "image.o.a")
     end
-    project_arg = recipe.project == "" ? Base.active_project() : recipe.project
     # Build command incrementally to guarantee proper token separation
     cmd = julia_cmd
     cmd = `$cmd --project=$project_arg $(image_arg) $(recipe.img_path) --output-incremental=no`
