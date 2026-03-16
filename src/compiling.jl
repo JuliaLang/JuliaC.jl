@@ -83,6 +83,16 @@ function compile_products(recipe::ImageRecipe)
     end
 
     project_arg = recipe.project == "" ? Base.active_project() : recipe.project
+
+    # Always copy the project to a temp dir so Pkg.instantiate() can write Manifest.toml etc.
+    # This avoids failures when the project dir is read-only (e.g. installed packages).
+    project_dir = dirname(project_arg)
+    tmp_project = mktempdir()
+    for f in readdir(project_dir)
+        cp(joinpath(project_dir, f), joinpath(tmp_project, f); force=true)
+    end
+    project_arg = joinpath(tmp_project, basename(project_arg))
+
     env_overrides = Dict{String,Any}()
     tmp_prefs_env = nothing
     if is_trim_enabled(recipe)

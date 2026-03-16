@@ -215,7 +215,7 @@
 
             libfile_name = libname * "." * Base.BinaryPlatforms.platform_dlext()
             libpath = joinpath(outdir, "bin", libfile_name)
-            output = read(`objdump -p $(libpath)`, String)
+            output = read(`$(Binutils_jll.objdump()) -p $(libpath)`, String)
             @test occursin(r"MajorImageVersion\s+32767", output)
             @test occursin(r"MinorImageVersion\s+32767", output)
         end
