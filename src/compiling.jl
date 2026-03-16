@@ -86,12 +86,15 @@ function compile_products(recipe::ImageRecipe)
 
     # Always copy the project to a temp dir so Pkg.instantiate() can write Manifest.toml etc.
     # This avoids failures when the project dir is read-only (e.g. installed packages).
-    project_dir = dirname(project_arg)
+    # project_arg may be a Project.toml path (from Base.active_project()) or a directory.
+    project_dir = isdir(project_arg) ? project_arg : dirname(project_arg)
     tmp_project = mktempdir()
     for f in readdir(project_dir)
-        cp(joinpath(project_dir, f), joinpath(tmp_project, f); force=true)
+        src = joinpath(project_dir, f)
+        dst = joinpath(tmp_project, f)
+        cp(src, dst; force=true)
     end
-    project_arg = joinpath(tmp_project, basename(project_arg))
+    project_arg = isdir(project_arg) ? tmp_project : joinpath(tmp_project, basename(project_arg))
 
     env_overrides = Dict{String,Any}()
     tmp_prefs_env = nothing

@@ -215,9 +215,23 @@
 
             libfile_name = libname * "." * Base.BinaryPlatforms.platform_dlext()
             libpath = joinpath(outdir, "bin", libfile_name)
-            output = read(`$(Binutils_jll.objdump()) -p $(libpath)`, String)
-            @test occursin(r"MajorImageVersion\s+32767", output)
-            @test occursin(r"MinorImageVersion\s+32767", output)
+            # Read PE image version directly from the optional header to avoid
+            # depending on objdump being available on Windows CI.
+            ver = open(libpath) do io
+                seek(io, 0x3C)
+                pe_offset = read(io, UInt32)
+                # PE signature (4) + COFF header (20) + optional header starts here
+                opt_hdr = pe_offset + 4 + 20
+                seek(io, opt_hdr)
+                magic = read(io, UInt16)
+                # MajorImageVersion is at offset 0x2C into the optional header
+                seek(io, opt_hdr + 0x2C)
+                major = read(io, UInt16)
+                minor = read(io, UInt16)
+                (major=major, minor=minor)
+            end
+            @test ver.major == 32767
+            @test ver.minor == 32767
         end
     end
 end
