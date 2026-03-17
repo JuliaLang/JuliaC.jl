@@ -83,6 +83,19 @@ function compile_products(recipe::ImageRecipe)
     end
 
     project_arg = recipe.project == "" ? Base.active_project() : recipe.project
+
+    # Always copy the project to a temp dir so Pkg.instantiate() can write Manifest.toml etc.
+    # This avoids failures when the project dir is read-only (e.g. installed packages).
+    # project_arg may be a Project.toml path (from Base.active_project()) or a directory.
+    project_dir = isdir(project_arg) ? project_arg : dirname(project_arg)
+    tmp_project = mktempdir()
+    for f in readdir(project_dir)
+        src = joinpath(project_dir, f)
+        dst = joinpath(tmp_project, f)
+        cp(src, dst; force=true)
+    end
+    project_arg = isdir(project_arg) ? tmp_project : joinpath(tmp_project, basename(project_arg))
+
     env_overrides = Dict{String,Any}()
     tmp_prefs_env = nothing
     if is_trim_enabled(recipe)
@@ -115,7 +128,6 @@ function compile_products(recipe::ImageRecipe)
         tmpdir = mktempdir()
         recipe.img_path = joinpath(tmpdir, "image.o.a")
     end
-    project_arg = recipe.project == "" ? Base.active_project() : recipe.project
     # Build command incrementally to guarantee proper token separation
     cmd = julia_cmd
     cmd = `$cmd --project=$project_arg $(image_arg) $(recipe.img_path) --output-incremental=no`
