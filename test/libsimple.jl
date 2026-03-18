@@ -45,6 +45,10 @@ Base.@ccallable function countsame(list::Ptr{MyTwoVec}, n::Int32)::Int32
     return count
 end
 
+Base.@ccallable function unnamed_arguments(::Int32, _::Int32)::Int32
+    return 0
+end
+
 export countsame, copyto_and_sum
 
 # FIXME? varargs
