@@ -94,6 +94,14 @@ function compile_products(recipe::ImageRecipe)
         dst = joinpath(tmp_project, f)
         cp(src, dst; force=true)
     end
+    # Ensure copied files are writable — Pkg-installed packages are read-only,
+    # and cp() preserves permissions. Pkg.instantiate() needs to write Manifest.toml etc.
+    for (root, dirs, files) in walkdir(tmp_project)
+        for name in Iterators.flatten((dirs, files))
+            p = joinpath(root, name)
+            chmod(p, filemode(p) | 0o200)
+        end
+    end
     project_arg = isdir(project_arg) ? tmp_project : joinpath(tmp_project, basename(project_arg))
 
     env_overrides = Dict{String,Any}()

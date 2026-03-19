@@ -56,6 +56,7 @@ function privatize_libjulia_common!(recipe::BundleRecipe, platform::PrivatizePla
         salted_base = string(salt, "_", base)
         salted_path = joinpath(dirname(p), salted_base)
         cp(p, salted_path; force=true)
+        chmod(salted_path, filemode(salted_path) | 0o200)  # ensure writable for patching
         push!(originals_to_remove, p)
         # Update library identity for salted copy (install_name/SONAME) via unified hook
         plat_set_library_id!(platform, salted_path, plat_dep_prefix(platform) * salted_base)
