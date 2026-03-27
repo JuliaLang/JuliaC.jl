@@ -169,12 +169,8 @@ function emit_method_info!(ctx::TypeEmitter, method::Core.Method; indent::Int = 
             println(ctx.io, i == length(sig.parameters) ? " }" : " },")
         end
         indented_println("  ],")
-        rt_json = if rt === Nothing
-            "null"
-        else
-            string("{ \"type_id\": ", ctx.type_ids[rt], " }")
-        end
-        indented_println("  \"returns\": ", rt_json)
+        rt_type_id = rt === Nothing ? "null" : string(ctx.type_ids[rt])
+        indented_println("  \"returns\": { \"type_id\": ", rt_type_id, " }")
         print(ctx.io, " " ^ indent, "}")
     end
 end

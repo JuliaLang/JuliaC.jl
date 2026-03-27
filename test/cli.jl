@@ -116,7 +116,7 @@ end
 
     # `return_void(x::Ptr{Cvoid}, y::Ptr{Ptr{Cvoid}})::Cvoid`
     fn_void = abi["functions"][findfirst(f -> f["symbol"] == "return_void", abi["functions"])::Int]
-    @test fn_void["returns"] === nothing
+    @test fn_void["returns"]["type_id"] === nothing
     # `Ptr{Cvoid}`
     ptr_cvoid = abi["types"][findfirst(t -> t["id"] == fn_void["arguments"][1]["type_id"], abi["types"])::Int]
     @test ptr_cvoid["kind"] == "pointer"
