@@ -45,6 +45,10 @@ Base.@ccallable function countsame(list::Ptr{MyTwoVec}, n::Int32)::Int32
     return count
 end
 
+Base.@ccallable return_void(x::Ptr{Cvoid}, y::Ptr{Ptr{Cvoid}})::Cvoid = nothing
+Base.@ccallable return_void_ptr()::Ptr{Cvoid} = Ptr{Cvoid}()
+Base.@ccallable return_void_ptr_ptr()::Ptr{Ptr{Cvoid}} = Ptr{Ptr{Cvoid}}()
+
 export countsame, copyto_and_sum
 
 # FIXME? varargs
