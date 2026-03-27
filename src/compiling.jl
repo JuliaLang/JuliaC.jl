@@ -66,14 +66,11 @@ function compile_products(recipe::ImageRecipe)
         get!(recipe.jl_options, "threads", "1")
     end
     if recipe.cpu_target === nothing
-        recipe.cpu_target = get(ENV,"JULIA_CPU_TARGET", nothing)
+        default_cpu_target = PackageCompiler.default_app_cpu_target()
+        recipe.cpu_target = get(ENV, "JULIA_CPU_TARGET", default_cpu_target)
     end
     julia_cmd = `$(Base.julia_cmd(;cpu_target=recipe.cpu_target)) --startup-file=no --history-file=no`
-    if recipe.cpu_target !== nothing
-        precompile_cpu_target = String(first(split(recipe.cpu_target, [';',','])))
-    else
-        precompile_cpu_target = nothing
-    end
+    precompile_cpu_target = String(first(split(recipe.cpu_target, [';',','])))
     # Ensure the app project is instantiated and precompiled
     if isdir(recipe.file)
         if recipe.project != ""
