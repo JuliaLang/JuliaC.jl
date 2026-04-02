@@ -85,7 +85,7 @@ img = ImageRecipe(
 link = LinkRecipe(
     image_recipe = img,
     outname      = "build/app_test_exe",
-    rpath        = nothing, # set automatically when bundling
+    rpath        = "@bundle", # set only when bundling
 )
 
 bun = BundleRecipe(
@@ -100,7 +100,7 @@ bundle_products(bun)
 
 ### Bundling and rpath
 
-When `--bundle` (or `BundleRecipe.output_dir`) is set, JuliaC:
+When `--bundle` (or `BundleRecipe.output_dir` and `LinkRecipe.rpath == "@bundle"`) is set, JuliaC:
 - Places the executable in `<output_dir>/bin` and libraries in `<output_dir>/lib` and `<output_dir>/lib/julia` (Windows: everything under `<output_dir>/bin`).
 - Copies required artifacts alongside the bundle.
 - Links your output with a relative rpath so the executable finds sibling libs (Unix uses `@loader_path/../lib` or `$ORIGIN/../lib`).
