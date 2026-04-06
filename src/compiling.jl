@@ -37,6 +37,32 @@ function _start_spinner(message::String; io::IO=stderr)
     return finished, task
 end
 
+"""
+Inject HostCPUFeatures preferences into a project's LocalPreferences.toml
+and ensure the extras section in Project.toml references HostCPUFeatures.
+
+Merges with any existing preferences/extras rather than overwriting.
+"""
+function _inject_trim_preferences(project_dir::String)
+    # Update Project.toml to include HostCPUFeatures in [extras]
+    proj_path = joinpath(project_dir, "Project.toml")
+    proj = isfile(proj_path) ? TOML.parsefile(proj_path) : Dict{String,Any}()
+    extras = get!(Dict{String,Any}, proj, "extras")
+    extras["HostCPUFeatures"] = "3e5b6fbb-0976-4d2c-9146-d79de83f2fb0"
+    open(proj_path, "w") do io
+        TOML.print(io, proj)
+    end
+
+    # Update LocalPreferences.toml with HostCPUFeatures preferences
+    prefs_path = joinpath(project_dir, "LocalPreferences.toml")
+    prefs = isfile(prefs_path) ? TOML.parsefile(prefs_path) : Dict{String,Any}()
+    hcf = get!(Dict{String,Any}, prefs, "HostCPUFeatures")
+    hcf["freeze_cpu_target"] = true
+    open(prefs_path, "w") do io
+        TOML.print(io, prefs)
+    end
+end
+
 function compile_products(recipe::ImageRecipe)
     # Only strip IR / metadata if not `--trim=no`
     strip_args = String[]
@@ -104,24 +130,16 @@ function compile_products(recipe::ImageRecipe)
     end
     project_arg = isdir(project_arg) ? tmp_project : joinpath(tmp_project, basename(project_arg))
 
-    env_overrides = Dict{String,Any}()
-    tmp_prefs_env = nothing
-    if is_trim_enabled(recipe)
-        load_path_sep = Sys.iswindows() ? ";" : ":"
-        # Create a temporary environment with a LocalPreferences.toml that will be added to JULIA_LOAD_PATH.
-        tmp_prefs_env = mktempdir()
-        open(joinpath(tmp_prefs_env, "Project.toml"), "w") do io
-            println(io, "[extras]")
-            println(io, "HostCPUFeatures = \"3e5b6fbb-0976-4d2c-9146-d79de83f2fb0\"")
-        end
-        # Write LocalPreferences.toml with the trim preferences
-        open(joinpath(tmp_prefs_env, "LocalPreferences.toml"), "w") do io
-            println(io, "[HostCPUFeatures]")
-            println(io, "freeze_cpu_target = true")
-        end
-        # Append the temp env to JULIA_LOAD_PATH
+    # Always clear JULIA_LOAD_PATH to prevent parent environment leakage
+    # (e.g. when JuliaC is invoked as a Pkg app, the shim sets JULIA_LOAD_PATH
+    # to JuliaC's own project, which would break user project compilation — #106).
+    env_overrides = Dict{String,Any}("JULIA_LOAD_PATH" => nothing)
 
-        env_overrides["JULIA_LOAD_PATH"] = load_path_sep * tmp_prefs_env
+    if is_trim_enabled(recipe)
+        # Write HostCPUFeatures preferences directly into the temp project copy
+        # so that the preference is visible without JULIA_LOAD_PATH manipulation.
+        tmp_project_dir = isdir(project_arg) ? project_arg : dirname(project_arg)
+        _inject_trim_preferences(tmp_project_dir)
     end
 
     inst_cmd = addenv(`$(Base.julia_cmd(cpu_target=precompile_cpu_target)) --project=$project_arg -e "using Pkg; Pkg.instantiate(); Pkg.precompile()"`, env_overrides...)
