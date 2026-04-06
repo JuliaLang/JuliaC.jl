@@ -302,11 +302,13 @@ end
 end
 
 # End-to-end: install JuliaC as a Pkg app, invoke the shim, compile a project.
+# Unix-only: the Pkg app shim is a shell script on Unix, a .cmd on Windows.
+if Sys.isunix()
 @testset "Pkg app end-to-end (#106)" begin
     mktempdir() do depot
         outdir = mktempdir()
         exename = "app_e2e"
-        sep = Sys.iswindows() ? ";" : ":"
+        sep = ":"
         bindir = joinpath(depot, "bin")
 
         # Install JuliaC as a Pkg app into a temporary depot.
@@ -332,9 +334,10 @@ end
             "PATH" => bindir * sep * ENV["PATH"],
         )
         @test success(build_cmd)
-        actual_exe = Sys.iswindows() ? joinpath(outdir, "bin", exename * ".exe") : joinpath(outdir, "bin", exename)
+        actual_exe = joinpath(outdir, "bin", exename)
         @test isfile(actual_exe)
         output = read(`$actual_exe`, String)
         @test occursin("Fast compilation test!", output)
     end
+end
 end
