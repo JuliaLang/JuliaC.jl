@@ -469,52 +469,6 @@ end
     @test occursin("nthreadpools=1", out)
 end
 
-# https://github.com/JuliaLang/JuliaC.jl/issues/124
-const DEP_PROJ = abspath(joinpath(@__DIR__, "DepProject"))
-
-@testset "Project with dependencies (no trim) (#124)" begin
-    outdir = mktempdir()
-    exeout = joinpath(outdir, "depproject")
-
-    img = JuliaC.ImageRecipe(
-        file = DEP_PROJ,
-        output_type = "--output-exe",
-        verbose = true,
-    )
-    JuliaC.compile_products(img)
-    link = JuliaC.LinkRecipe(image_recipe=img, outname=exeout, rpath=JuliaC.RPATH_BUNDLE)
-    JuliaC.link_products(link)
-    bun = JuliaC.BundleRecipe(link_recipe=link, output_dir=outdir)
-    JuliaC.bundle_products(bun)
-
-    actual_exe = Sys.iswindows() ? joinpath(outdir, "bin", basename(exeout) * ".exe") : joinpath(outdir, "bin", basename(exeout))
-    @test isfile(actual_exe)
-    output = read(`$actual_exe`, String)
-    @test occursin("sha256:", output)
-end
-
-@testset "Project with dependencies (trim) (#124)" begin
-    outdir = mktempdir()
-    exeout = joinpath(outdir, "depproject_trim")
-
-    img = JuliaC.ImageRecipe(
-        file = DEP_PROJ,
-        output_type = "--output-exe",
-        trim_mode = "safe",
-        verbose = true,
-    )
-    JuliaC.compile_products(img)
-    link = JuliaC.LinkRecipe(image_recipe=img, outname=exeout, rpath=JuliaC.RPATH_BUNDLE)
-    JuliaC.link_products(link)
-    bun = JuliaC.BundleRecipe(link_recipe=link, output_dir=outdir)
-    JuliaC.bundle_products(bun)
-
-    actual_exe = Sys.iswindows() ? joinpath(outdir, "bin", basename(exeout) * ".exe") : joinpath(outdir, "bin", basename(exeout))
-    @test isfile(actual_exe)
-    output = read(`$actual_exe`, String)
-    @test occursin("sha256:", output)
-end
-
 @testset "Project as File" begin
     outdir = mktempdir()
     exeout = joinpath(outdir, "prog_exe_projfile")

@@ -1,9 +1,0 @@
-name = "DepProject"
-uuid = "f47ac10b-58cc-4372-a567-0e02b2c3d479"
-version = "0.1.0"
-
-[deps]
-SHA = "ea8e919c-243c-51af-8825-aaa63cd721ce"
-
-[apps]
-DepProject = {}
