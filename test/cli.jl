@@ -276,3 +276,68 @@ end
     @test String(take!(io)) ==
         "juliac version $(pkgversion(JuliaC)), julia version $(VERSION)\n"
 end
+
+# https://github.com/JuliaLang/JuliaC.jl/issues/106
+# When JuliaC is installed as a Pkg app, the generated shim sets
+# JULIA_LOAD_PATH to the JuliaC project directory. Without clearing this
+# in subprocesses, it leaks into the user's project compilation.
+# Commit 3a17f5c fixed this by clearing JULIA_LOAD_PATH unconditionally,
+# but 6940a31 regressed it (only modifies JULIA_LOAD_PATH when trimming).
+@testset "Pkg app JULIA_LOAD_PATH isolation (#106)" begin
+    # The Pkg app shim sets JULIA_LOAD_PATH=<JuliaC project dir>/
+    # Simulate this by running `julia -m JuliaC` with that exact env.
+    outdir = mktempdir()
+    exename = "app_pkgapp"
+    cmd = addenv(
+        `$(Base.julia_cmd()) --startup-file=no --history-file=no --project=$(ROOT) -m JuliaC
+         --output-exe $exename $(TEST_PROJ) --bundle $outdir --verbose`,
+        # This is what the Pkg app shim sets — just JuliaC's own project
+        "JULIA_LOAD_PATH" => ROOT * "/",
+    )
+    @test success(cmd)
+    actual_exe = Sys.iswindows() ? joinpath(outdir, "bin", exename * ".exe") : joinpath(outdir, "bin", exename)
+    @test isfile(actual_exe)
+    output = read(`$actual_exe`, String)
+    @test occursin("Fast compilation test!", output)
+end
+
+# End-to-end: install JuliaC as a Pkg app, invoke the shim, compile a project.
+# Unix-only: the Pkg app shim is a shell script on Unix, a .cmd on Windows.
+if Sys.isunix()
+@testset "Pkg app end-to-end (#106)" begin
+    mktempdir() do depot
+        outdir = mktempdir()
+        exename = "app_e2e"
+        sep = ":"
+        bindir = joinpath(depot, "bin")
+
+        # Install JuliaC as a Pkg app into a temporary depot.
+        # Include the user's primary depot so JuliaC's dependencies are available.
+        depot_path = join([depot; Base.DEPOT_PATH], sep)
+        install_script = """
+        using Pkg
+        Pkg.Apps.develop(; path=$(repr(ROOT)))
+        """
+        install_cmd = addenv(
+            `$(Base.julia_cmd()) --startup-file=no --history-file=no -e $install_script`,
+            "JULIA_DEPOT_PATH" => depot_path,
+        )
+        @test success(install_cmd)
+
+        # The shim should now exist
+        shim = joinpath(bindir, "juliac")
+        @test isfile(shim)
+
+        # Invoke the shim to compile our test project
+        build_cmd = addenv(
+            `$shim --output-exe $exename $(TEST_PROJ) --bundle $outdir --verbose`,
+            "PATH" => bindir * sep * ENV["PATH"],
+        )
+        @test success(build_cmd)
+        actual_exe = joinpath(outdir, "bin", exename)
+        @test isfile(actual_exe)
+        output = read(`$actual_exe`, String)
+        @test occursin("Fast compilation test!", output)
+    end
+end
+end
