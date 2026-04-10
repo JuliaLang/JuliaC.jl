@@ -56,14 +56,16 @@ end
     # 3. arg1
     # 4. arg2
     # 5. The sum_areas result: 4.0 + pi = 7.141592653589793
+    # 6. _test_cat() result (a Float64)
     output = readchomp(`$actual_exe arg1 arg2`)
     lines = split(output, '\n')
-    @test length(lines) >= 5
+    @test length(lines) >= 6
     @test lines[1] == "Hello, world!"
     @test lines[2] == actual_exe  # PROGRAM_FILE
     @test lines[3] == "arg1"
     @test lines[4] == "arg2"
     @test parse(Float64, lines[5]) ≈ (4.0 + pi)
+    @test parse(Float64, lines[6]) isa Float64
 
     print_tree_with_sizes(outdir)
 end
