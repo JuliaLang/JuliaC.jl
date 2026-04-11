@@ -85,7 +85,6 @@ img = ImageRecipe(
 link = LinkRecipe(
     image_recipe = img,
     outname      = "build/app_test_exe",
-    rpath        = nothing, # set automatically when bundling
 )
 
 bun = BundleRecipe(
@@ -107,6 +106,10 @@ When `--bundle` (or `BundleRecipe.output_dir`) is set, JuliaC:
 - On macOS, creates convenience versioned `.dylib` symlinks if missing.
 
 This produces a relocatable directory you can distribute.
+
+When using the Library API, set `rpath = "@bundle"` in `LinkRecipe` to use relative rpaths
+suitable for a relocatable bundle. The default (`"@julia"`) uses absolute paths to the
+current Julia installation, which is convenient for development but not for distribution.
 
 ### Trimming
 
