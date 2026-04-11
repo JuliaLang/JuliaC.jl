@@ -117,10 +117,14 @@ end
         @noinline
         throw(DimensionMismatch("all inputs to eachindex must have the same axes"))
     end
-    setfield!(typeof(Base.throw_eachindex_mismatch_indices).name, :max_args, Int32(5), :monotonic)
+    setfield!(typeof(throw_boundserror).name, :max_args, Int32(5), :monotonic)
+    setfield!(typeof(throw_eachindex_mismatch_indices).name, :max_args, Int32(5), :monotonic)
     setfield!(typeof(Base.print).name, :max_args, Int32(10), :monotonic)
     setfield!(typeof(Base.println).name, :max_args, Int32(10), :monotonic)
     setfield!(typeof(Base.print_to_string).name, :max_args, Int32(10), :monotonic)
+    if @isdefined(_throw_boundserror_indices)
+        setfield!(typeof(_throw_boundserror_indices).name, :max_args, Int32(5), :monotonic)
+    end
 
     # not `--trim`-compatible if these resolve to a Varargs{...} specialization, primarily
     # due to `Core._apply_iterate` having no dispatch-resolved form (#57830)
