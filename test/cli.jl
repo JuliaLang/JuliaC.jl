@@ -159,6 +159,7 @@ end
     @test link.outname == "app"
     @test bun.output_dir == abspath(dirname(link.outname))
     @test link.rpath == JuliaC.RPATH_BUNDLE  # Should use @bundle when bundling
+    @test bun.bundle_lazy_artifacts == false
 
     # Library with explicit bundle dir, ccallable and experimental
     outdir = mktempdir()
@@ -180,6 +181,7 @@ end
     @test link2.outname == joinpath(outdir, "mylib")
     @test bun2.output_dir == outdir
     @test link2.rpath == JuliaC.RPATH_BUNDLE  # Should use @bundle when bundling
+    @test bun2.bundle_lazy_artifacts == false
 
     args3 = String[
         "--output-exe", "app",
@@ -192,6 +194,29 @@ end
     @test img3.output_type == "--output-exe"
     @test link3.rpath == JuliaC.RPATH_JULIA  # Should use @julia when not bundling
     @test bun3.output_dir === nothing  # No bundling
+    @test bun3.bundle_lazy_artifacts == false
+
+    # --bundle-lazy-artifacts opts in
+    args_lazy = String[
+        "--output-exe", "app",
+        "--project", TEST_PROJ,
+        "--trim=safe",
+        TEST_SRC,
+        "--bundle",
+        "--bundle-lazy-artifacts",
+    ]
+    _, _, bun_lazy = JuliaC._parse_cli_args(args_lazy)
+    @test bun_lazy.bundle_lazy_artifacts == true
+
+    # --bundle-lazy-artifacts requires --bundle
+    args_lazy_no_bundle = String[
+        "--output-exe", "app",
+        "--project", TEST_PROJ,
+        "--trim=safe",
+        TEST_SRC,
+        "--bundle-lazy-artifacts",
+    ]
+    @test_throws ErrorException JuliaC._parse_cli_args(args_lazy_no_bundle)
 
     # --jl-option with space separator
     args_jlopt = String[

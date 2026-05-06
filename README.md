@@ -63,6 +63,8 @@ julia --project -e "using JuliaC; JuliaC.main(ARGS)" -- \
 - `--output-lib|--output-sysimage|--output-o|--output-bc <path>`: Output path for non-executable artifacts.
 - `--project <path>`: Project to instantiate/precompile (defaults to active project).
 - `--bundle <dir>`: Copy required Julia libs/stdlibs and artifacts next to the output; also sets a relative rpath.
+- `--bundle-lazy-artifacts`: Also copy lazy artifacts into the bundle (off by default; opt in
+  when your dependencies download artifacts on first use).
 - `--trim[=mode]`: Enable code trimming (e.g. `--trim=safe`). Use `--trim=no` to disable.
 - `--compile-ccallable`: Export `ccallable` entrypoints (see C-callable section).
 - `--experimental`: Forwarded to Julia; required for `--trim` on some builds.
