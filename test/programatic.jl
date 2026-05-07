@@ -115,6 +115,33 @@
         end
     end
 
+    # https://github.com/JuliaLang/JuliaC.jl/issues/135
+    @testset "Multiple extra_objects link correctly" begin
+        outdir = mktempdir()
+        libname = "libmultiextraobjs"
+        libout = joinpath(outdir, libname)
+        c_sources = [
+            abspath(joinpath(@__DIR__, "c", "cshim_extra1.c")),
+            abspath(joinpath(@__DIR__, "c", "cshim_extra2.c")),
+        ]
+        img = JuliaC.ImageRecipe(
+            file = TEST_LIB_SRC,
+            output_type = "--output-lib",
+            project = TEST_LIB_PROJ,
+            add_ccallables = true,
+            trim_mode = "safe",
+            c_sources = c_sources,
+            verbose = true,
+        )
+        JuliaC.compile_products(img)
+        @test length(img.extra_objects) >= 2
+        link = JuliaC.LinkRecipe(image_recipe=img, outname=libout, rpath=JuliaC.RPATH_BUNDLE)
+        JuliaC.link_products(link)
+
+        dlext = Base.BinaryPlatforms.platform_dlext()
+        @test isfile(libout * "." * dlext)
+    end
+
     # https://github.com/JuliaLang/JuliaC.jl/pull/74
     @testset "Library has SONAME (Linux)" begin
         if Sys.islinux()
