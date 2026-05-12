@@ -124,7 +124,7 @@ function compile_products(recipe::ImageRecipe)
         env_overrides["JULIA_LOAD_PATH"] = load_path_sep * tmp_prefs_env
     end
 
-    inst_cmd = addenv(`$(Base.julia_cmd(cpu_target=precompile_cpu_target))  -e "using Pkg; Pkg.activate(only(ARGS)); Pkg.instantiate(); Pkg.precompile()" $project_arg`, env_overrides...)
+    inst_cmd = addenv(`$(Base.julia_cmd(cpu_target=precompile_cpu_target)) --project=$project_arg -e "using Pkg; Pkg.instantiate(); Pkg.precompile()"`, env_overrides...)
     recipe.verbose && println("Running: $inst_cmd")
     precompile_time = time_ns()
     if !success(pipeline(inst_cmd; stdout, stderr))
