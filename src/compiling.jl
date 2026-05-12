@@ -105,10 +105,7 @@ function compile_products(recipe::ImageRecipe)
     project_arg = isdir(project_arg) ? tmp_project : joinpath(tmp_project, basename(project_arg))
 
     env_overrides = Dict{String,Any}()
-    # Pin JULIA_LOAD_PATH to the user's project plus `@stdlib` so that
-    # `using Pkg` resolves via the stdlib (no Pkg dep required in the user's
-    # project, and JuliaC's own env doesn't leak through when JuliaC is
-    # invoked as a Pkg app — see #127).
+    # Add `@stdlib` to the LOAD_PATH so Pkg can be discovered
     load_path_sep = Sys.iswindows() ? ";" : ":"
     load_path_entries = [project_arg, "@stdlib"]
     tmp_prefs_env = nothing
