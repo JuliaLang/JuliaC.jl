@@ -126,6 +126,13 @@ function link_products(recipe::LinkRecipe)
     try
         mkpath(dirname(recipe.outname))
         is_shared_output = image_recipe.output_type != "--output-exe"
+        # Reject output paths that resolve to an existing directory; on case-insensitive
+        # filesystems this also catches case-only collisions with the package dir (#132).
+        if isdir(recipe.outname)
+            error("Output path '$(recipe.outname)' already exists as a directory " *
+                  "(case-insensitive filesystems may match a differently-cased dir " *
+                  "such as the package directory). Choose a different output name.")
+        end
         # Base command
         cmd2 = `$(compiler_cmd)`
         for f in recipe.ld_flags
@@ -137,16 +144,18 @@ function link_products(recipe::LinkRecipe)
         end
         # Link in the whole archive and user-provided objects, then undo WHOLE_ARCHIVE
         cmd2 = `$cmd2 -Wl,$(Base.Linking.WHOLE_ARCHIVE) $(image_recipe.img_path) $(image_recipe.extra_objects) -Wl,$(Base.Linking.NO_WHOLE_ARCHIVE) $(julia_libs)`
-        # Platform-specific linker flags
+        # install_name / soname / import-lib are shared-library only.
         lib_name = basename(recipe.outname)
-        if Sys.iswindows()
-            lib_basename, _ = splitext(lib_name)
-            import_lib_path = joinpath(dirname(recipe.outname), lib_basename * ".dll.a")
-            cmd2 = `$cmd2 -Wl,--out-implib=$(import_lib_path)`
-        elseif Sys.isapple()
-            cmd2 = `$cmd2 -Wl,-install_name,@rpath/$(lib_name)`
-        elseif Sys.islinux()
-            cmd2 = `$cmd2 -Wl,-soname,$(lib_name)`
+        if is_shared_output
+            if Sys.iswindows()
+                lib_basename, _ = splitext(lib_name)
+                import_lib_path = joinpath(dirname(recipe.outname), lib_basename * ".dll.a")
+                cmd2 = `$cmd2 -Wl,--out-implib=$(import_lib_path)`
+            elseif Sys.isapple()
+                cmd2 = `$cmd2 -Wl,-install_name,@rpath/$(lib_name)`
+            elseif Sys.islinux()
+                cmd2 = `$cmd2 -Wl,-soname,$(lib_name)`
+            end
         end
         image_recipe.verbose && println("Running: $cmd2")
         run(cmd2)
