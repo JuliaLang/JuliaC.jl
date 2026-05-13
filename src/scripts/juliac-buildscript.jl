@@ -79,10 +79,7 @@ end
 
 let usermod
     if isdir(source_path)
-        patharg = source_path
-        if endswith(patharg, "/")
-            patharg = chop(patharg)
-        end
+        patharg = rstrip(source_path, ['/', '\\'])
         dname = splitdir(patharg)[2]
         pkgname = Symbol(splitext(dname)[1])
         Base.eval(Main, :(using $pkgname))
