@@ -11,17 +11,16 @@ function bundle_products(recipe::BundleRecipe)
         return
     end
 
-    # Clear bundle-owned subdirs so re-runs are idempotent (PackageCompiler's
-    # bundle_cert/bundle_artifacts cp without force; bundle_julia_libraries
-    # skips existing files and can leave stale libs across Julia upgrades).
-    # Skip any subdir that contains the link output (programmatic API).
+    # Wipe the previous bundle so re-runs are idempotent (PackageCompiler's
+    # bundle_cert/bundle_artifacts cp without force). Skip any entry that
+    # holds the link output (programmatic API allows outname inside output_dir).
     out_abs = abspath(recipe.output_dir)
     outname_abs = abspath(recipe.link_recipe.outname)
-    for sub in ("bin", "lib", joinpath("share", "julia"))
-        p = joinpath(out_abs, sub)
-        isdir(p) || continue
-        startswith(relpath(outname_abs, p), "..") || continue
-        rm(p; force=true, recursive=true)
+    if isdir(out_abs)
+        for entry in readdir(out_abs, join=true)
+            startswith(relpath(outname_abs, abspath(entry)), "..") || continue
+            rm(entry; force=true, recursive=true)
+        end
     end
 
     # Ensure the bundle output directory exists
