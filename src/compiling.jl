@@ -104,12 +104,13 @@ function compile_products(recipe::ImageRecipe)
     end
     project_arg = isdir(project_arg) ? tmp_project : joinpath(tmp_project, basename(project_arg))
 
-    env_overrides = Dict{String,Any}()
-    # Add `@stdlib` to the LOAD_PATH so Pkg can be discovered
-    load_path_sep = Sys.iswindows() ? ";" : ":"
-    load_path_entries = [project_arg, "@stdlib"]
+    # Drop any inherited JULIA_LOAD_PATH (e.g. set by the Pkg-app shim to
+    # JuliaC's own env) so the subprocess falls back to the default
+    # ["@", "@v#.#", "@stdlib"] and `using Pkg` resolves via @stdlib.
+    env_overrides = Dict{String,Any}("JULIA_LOAD_PATH" => nothing)
     tmp_prefs_env = nothing
     if is_trim_enabled(recipe)
+        load_path_sep = Sys.iswindows() ? ";" : ":"
         # Create a temporary environment with a LocalPreferences.toml that will be added to JULIA_LOAD_PATH.
         tmp_prefs_env = mktempdir()
         open(joinpath(tmp_prefs_env, "Project.toml"), "w") do io
@@ -121,9 +122,10 @@ function compile_products(recipe::ImageRecipe)
             println(io, "[HostCPUFeatures]")
             println(io, "freeze_cpu_target = true")
         end
-        push!(load_path_entries, tmp_prefs_env)
+        # Leading separator → an empty entry that expands to the default load path,
+        # then append the temp prefs env.
+        env_overrides["JULIA_LOAD_PATH"] = load_path_sep * tmp_prefs_env
     end
-    env_overrides["JULIA_LOAD_PATH"] = join(load_path_entries, load_path_sep)
 
     inst_cmd = addenv(`$(Base.julia_cmd(cpu_target=precompile_cpu_target)) --project=$project_arg -e "using Pkg; Pkg.instantiate(); Pkg.precompile()"`, env_overrides...)
     recipe.verbose && println("Running: $inst_cmd")
