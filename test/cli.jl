@@ -113,6 +113,30 @@ end
     # `Ptr{CTree{Float64}}` should refer (recursively) back to the original type id
     Ptr_CTree_Float64 = abi["types"][CVector_CTree_Float64["fields"][2]["type_id"]]
     @test Ptr_CTree_Float64["pointee_type_id"] == CTree_Float64_id
+
+    # `return_void(x::Ptr{Cvoid}, y::Ptr{Ptr{Cvoid}})::Cvoid`
+    fn_void = abi["functions"][findfirst(f -> f["symbol"] == "return_void", abi["functions"])::Int]
+    @test fn_void["returns"]["type_id"] === nothing
+    # `Ptr{Cvoid}`
+    ptr_cvoid = abi["types"][findfirst(t -> t["id"] == fn_void["arguments"][1]["type_id"], abi["types"])::Int]
+    @test ptr_cvoid["kind"] == "pointer"
+    @test ptr_cvoid["pointee_type_id"] === nothing
+    # `Ptr{Ptr{Cvoid}}`
+    ptr_ptr_cvoid = abi["types"][findfirst(t -> t["id"] == fn_void["arguments"][2]["type_id"], abi["types"])::Int]
+    @test ptr_ptr_cvoid["kind"] == "pointer"
+    @test ptr_ptr_cvoid["pointee_type_id"] == ptr_cvoid["id"]
+
+    # `return_void_ptr()::Ptr{Cvoid}`
+    fn_void_ptr = abi["functions"][findfirst(f -> f["symbol"] == "return_void_ptr", abi["functions"])::Int]
+    ret_ptr = abi["types"][findfirst(t -> t["id"] == fn_void_ptr["returns"]["type_id"], abi["types"])::Int]
+    @test ret_ptr["kind"] == "pointer"
+    @test ret_ptr["pointee_type_id"] === nothing
+
+    # `return_void_ptr_ptr()::Ptr{Ptr{Cvoid}}`
+    fn_void_ptr_ptr = abi["functions"][findfirst(f -> f["symbol"] == "return_void_ptr_ptr", abi["functions"])::Int]
+    ret_ptr_ptr = abi["types"][findfirst(t -> t["id"] == fn_void_ptr_ptr["returns"]["type_id"], abi["types"])::Int]
+    @test ret_ptr_ptr["kind"] == "pointer"
+    @test ret_ptr_ptr["pointee_type_id"] == ret_ptr["id"]
 end
 
 @testset "CLI library privatize end-to-end" begin

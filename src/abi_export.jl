@@ -10,6 +10,7 @@ function recursively_add_types!(types::Base.IdSet{DataType}, @nospecialize(T::Da
     while T.name === Ptr.body.name
         push!(types, T)
         T = T.parameters[1] # unwrap Ptr{...}
+        T === Nothing && return types
         T in types && return types
     end
     if T.name.module === Core && T ∉ C_friendly_types
@@ -68,7 +69,8 @@ function field_name_json(@nospecialize(dt::DataType), field::Int)
 end
 
 function emit_pointer_info!(ctx::TypeEmitter, @nospecialize(dt::DataType); indent::Int = 0)
-    pointee_type_id = ctx.type_ids[dt.parameters[1]]
+    pointee = dt.parameters[1]
+    pointee_type_id = pointee === Nothing ? "null" : string(ctx.type_ids[pointee])
     let indented_println(args...) = println(ctx.io, " " ^ indent, args...)
         indented_println("{")
         indented_println("  \"id\": ", ctx.type_ids[dt], ",")
@@ -167,7 +169,8 @@ function emit_method_info!(ctx::TypeEmitter, method::Core.Method; indent::Int = 
             println(ctx.io, i == length(sig.parameters) ? " }" : " },")
         end
         indented_println("  ],")
-        indented_println("  \"returns\": { \"type_id\": ", ctx.type_ids[rt], " }")
+        rt_type_id = rt === Nothing ? "null" : string(ctx.type_ids[rt])
+        indented_println("  \"returns\": { \"type_id\": ", rt_type_id, " }")
         print(ctx.io, " " ^ indent, "}")
     end
 end
@@ -211,7 +214,7 @@ function write_abi_metadata(io::IO)
             for T in sig.parameters[2:end]
                 recursively_add_types!(types, T)
             end
-            recursively_add_types!(types, rt)
+            rt !== Nothing && recursively_add_types!(types, rt)
         end
     end
 
