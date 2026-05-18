@@ -162,7 +162,9 @@ function emit_method_info!(ctx::TypeEmitter, method::Core.Method; indent::Int = 
         for i in 2:length(sig.parameters)
             print(ctx.io, " " ^ (indent + 4))
             print(ctx.io, "{")
-            print(ctx.io, " \"name\": ", escape_string_json(argnames[i]), ",")
+            argname = argnames[i]
+            name_json = argname == "#unused#" ? "null" : escape_string_json(argname)
+            print(ctx.io, " \"name\": ", name_json, ",")
             print(ctx.io, " \"type_id\": ", ctx.type_ids[sig.parameters[i]])
             println(ctx.io, i == length(sig.parameters) ? " }" : " },")
         end

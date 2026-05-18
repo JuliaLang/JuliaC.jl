@@ -113,6 +113,10 @@ end
     # `Ptr{CTree{Float64}}` should refer (recursively) back to the original type id
     Ptr_CTree_Float64 = abi["types"][CVector_CTree_Float64["fields"][2]["type_id"]]
     @test Ptr_CTree_Float64["pointee_type_id"] == CTree_Float64_id
+
+    # Unnamed argument names should be exported as empty strings
+    unnamed = abi["functions"][findfirst(x -> x["symbol"] == "unnamed_arguments", abi["functions"])::Int]
+    @test all(isnothing, arg["name"] for arg in unnamed["arguments"])
 end
 
 @testset "CLI library privatize end-to-end" begin
