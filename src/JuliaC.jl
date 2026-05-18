@@ -4,6 +4,7 @@ using Pkg
 using PackageCompiler
 using LazyArtifacts
 using RelocatableFolders
+using TOML
 
 @static if VERSION >= v"1.12.0-rc1"
 

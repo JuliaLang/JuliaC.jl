@@ -303,3 +303,70 @@ end
     @test String(take!(io)) ==
         "juliac version $(pkgversion(JuliaC)), julia version $(VERSION)\n"
 end
+
+# https://github.com/JuliaLang/JuliaC.jl/issues/106 + #124
+# Simulate the Pkg-app shim env by running `julia -m JuliaC` with
+# JULIA_LOAD_PATH=<JuliaC project>/. This requires $ROOT to contain a
+# resolved Manifest.toml, which is only true in a dev checkout — Pkg-installed
+# JuliaC has its Manifest.toml gitignored. Gate the test on an opt-in env var
+# set in JuliaC's own CI (.github/workflows/ci.yml), so it doesn't run when
+# JuliaC is exercised as an installed package (e.g. from Julia's CI).
+if get(ENV, "JULIAC_TEST_PKG_APP_SHIM_SIM", "") == "1"
+@testset "Pkg app JULIA_LOAD_PATH isolation (#106)" begin
+    isfile(joinpath(ROOT, "Manifest.toml")) ||
+        error("JULIAC_TEST_PKG_APP_SHIM_SIM=1 requires a resolved \$ROOT/Manifest.toml")
+    outdir = mktempdir()
+    exename = "app_pkgapp"
+    cmd = addenv(
+        `$(Base.julia_cmd()) --startup-file=no --history-file=no --project=$(ROOT) -m JuliaC
+         --output-exe $exename $(TEST_PROJ) --bundle $outdir --verbose`,
+        "JULIA_LOAD_PATH" => ROOT * "/",
+    )
+    @test success(cmd)
+    actual_exe = Sys.iswindows() ? joinpath(outdir, "bin", exename * ".exe") : joinpath(outdir, "bin", exename)
+    @test isfile(actual_exe)
+    if isfile(actual_exe)
+        output = read(`$actual_exe`, String)
+        @test occursin("Fast compilation test!", output)
+    end
+end
+end
+
+# End-to-end: install JuliaC as a Pkg app, invoke the shim, compile a project.
+# Unix-only: the Pkg app shim is a shell script on Unix, a .cmd on Windows.
+if Sys.isunix()
+@testset "Pkg app end-to-end (#106)" begin
+    mktempdir() do depot
+        outdir = mktempdir()
+        exename = "app_e2e"
+        sep = ":"
+        bindir = joinpath(depot, "bin")
+
+        depot_path = join([depot; Base.DEPOT_PATH], sep)
+        install_script = """
+        using Pkg
+        Pkg.Apps.develop(; path=$(repr(ROOT)))
+        """
+        install_cmd = addenv(
+            `$(Base.julia_cmd()) --startup-file=no --history-file=no -e $install_script`,
+            "JULIA_DEPOT_PATH" => depot_path,
+        )
+        @test success(install_cmd)
+
+        shim = joinpath(bindir, "juliac")
+        @test isfile(shim)
+
+        build_cmd = addenv(
+            `$shim --output-exe $exename $(TEST_PROJ) --bundle $outdir --verbose`,
+            "PATH" => bindir * sep * ENV["PATH"],
+        )
+        @test success(build_cmd)
+        actual_exe = joinpath(outdir, "bin", exename)
+        @test isfile(actual_exe)
+        if isfile(actual_exe)
+            output = read(`$actual_exe`, String)
+            @test occursin("Fast compilation test!", output)
+        end
+    end
+end
+end

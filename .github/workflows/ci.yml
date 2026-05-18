@@ -39,4 +39,9 @@ jobs:
       - uses: julia-actions/cache@v3
       - uses: julia-actions/julia-buildpkg@v1
       - uses: julia-actions/julia-runtest@v1
+        env:
+          # Opt into the Pkg-app shim simulation regression test (#106/#124).
+          # Requires a resolved Manifest.toml in $ROOT, so only runs in dev
+          # checkouts — not when JuliaC is exercised as an installed package.
+          JULIAC_TEST_PKG_APP_SHIM_SIM: "1"
 
