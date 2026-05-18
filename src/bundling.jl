@@ -11,13 +11,17 @@ function bundle_products(recipe::BundleRecipe)
         return
     end
 
-    # Wipe the previous bundle so re-runs are idempotent (PackageCompiler's
-    # bundle_cert/bundle_artifacts cp without force). Skip any entry that
-    # holds the link output (programmatic API allows outname inside output_dir).
+    # Wipe top-level subdirs of a previous bundle so re-runs are idempotent
+    # (PackageCompiler's bundle_cert/bundle_artifacts cp without force). Only
+    # touch directories: top-level files are link products (the main artifact
+    # plus, on Windows, its sibling `.dll.a` import library) and must survive.
+    # Skip any subdir that contains the link output (programmatic API allows
+    # outname inside output_dir).
     out_abs = abspath(recipe.output_dir)
     outname_abs = abspath(recipe.link_recipe.outname)
     if isdir(out_abs)
         for entry in readdir(out_abs, join=true)
+            isdir(entry) || continue
             startswith(relpath(outname_abs, abspath(entry)), "..") || continue
             rm(entry; force=true, recursive=true)
         end
