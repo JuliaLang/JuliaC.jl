@@ -36,6 +36,14 @@ Base.@ccallable "copyto_and_sum" function badname(fromto::CVectorPair{Float32}):
     return sum(to)
 end
 
+struct CBuf4
+    data::NTuple{4, Float64}
+end
+
+Base.@ccallable "first_elt" function first_elt(buf::Ptr{CBuf4})::Float64
+    return unsafe_load(buf).data[1]
+end
+
 Base.@ccallable function countsame(list::Ptr{MyTwoVec}, n::Int32)::Int32
     list = unsafe_wrap(Array, list, n)
     count = 0

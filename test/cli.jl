@@ -113,6 +113,17 @@ end
     # `Ptr{CTree{Float64}}` should refer (recursively) back to the original type id
     Ptr_CTree_Float64 = abi["types"][CVector_CTree_Float64["fields"][2]["type_id"]]
     @test Ptr_CTree_Float64["pointee_type_id"] == CTree_Float64_id
+
+    # Homogeneous NTuple field should be emitted with `"kind": "array"` rather
+    # than expanded to per-element struct fields.
+    @test any(Bool[type["name"] == "CBuf4" for type in abi["types"]])
+    CBuf4 = abi["types"][findfirst(type["name"] == "CBuf4" for type in abi["types"])]
+    @test length(CBuf4["fields"]) == 1
+    tuple_type = abi["types"][CBuf4["fields"][1]["type_id"]]
+    @test tuple_type["kind"] == "array"
+    @test tuple_type["count"] == 4
+    @test abi["types"][tuple_type["element_type_id"]]["name"] == "Float64"
+    @test tuple_type["size"] == 32
 end
 
 @testset "CLI library privatize end-to-end" begin
