@@ -18,6 +18,7 @@ function recursively_add_types!(types::Base.IdSet{DataType}, @nospecialize(T::Da
     push!(types, T)
     for list in (T.parameters, fieldtypes(T))
         for S in list
+            S isa DataType || continue   # skip non-type parameters (Int, TypeVar, Vararg, …)
             recursively_add_types!(types, S)
         end
     end

@@ -124,6 +124,22 @@ end
     @test tuple_type["count"] == 4
     @test abi["types"][tuple_type["element_type_id"]]["name"] == "Float64"
     @test tuple_type["size"] == 32
+
+    # Parametric struct with a non-type (`Int`) parameter: the build itself
+    # is the test — before the guard in `recursively_add_types!` was added,
+    # iterating `T.parameters` of `CArrayN{Float64,3}` hit the `2`/`3` `Int`
+    # and crashed with a `MethodError`. Confirm the type made it out the
+    # other side and has the expected shape.
+    carray3d = abi["types"][findfirst(t["name"] == "CArrayN{Float64, 3}" for t in abi["types"])]
+    @test carray3d["kind"] == "struct"
+    @test length(carray3d["fields"]) == 2
+    dims_type = abi["types"][carray3d["fields"][1]["type_id"]]
+    @test dims_type["kind"] == "array"
+    @test dims_type["count"] == 3
+    @test abi["types"][dims_type["element_type_id"]]["name"] == "Int32"
+    data_type = abi["types"][carray3d["fields"][2]["type_id"]]
+    @test data_type["kind"] == "pointer"
+    @test abi["types"][data_type["pointee_type_id"]]["name"] == "Float64"
 end
 
 @testset "CLI library privatize end-to-end" begin
