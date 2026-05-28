@@ -3,7 +3,7 @@ Linux-specific privatization for libjulia.
 
 High-level steps:
 1) Copy `libjulia*` and `libjulia-internal*` to salted basenames next to originals.
-2) Set SONAME of each salted library to the salted basename (via patchelf) and DEP_LIBS with ObjectFile.jl
+2) Set SONAME of each salted library to the salted basename (in-place, pure-Julia ELF patching) and DEP_LIBS with ObjectFile.jl
 3) Rewrite DT_NEEDED entries in the built artifact and salted libs to the salted basenames
    (no `@rpath` on Linux; DT_NEEDED entries are plain basenames).
 4) Recreate symlinks
@@ -47,7 +47,7 @@ _salt_julia_name(name::String, salt::String) = replace(name, "libjulia" => salt;
 # Rename the single DT_NEEDED entry `old` (a "libjulia*" name) in `binpath` to the
 # salt-substituted form derived from the salted dependency basename `new`.
 # Length-preserving: the version-bearing `old` string keeps its byte length.
-function patchelf_replace_needed!(binpath::String, old::String, new::String)
+function replace_needed_salted!(binpath::String, old::String, new::String)
     @assert occursin("libjulia", old) "refusing to rewrite DT_NEEDED \"$old\" in $binpath: not a libjulia entry"
     salted = _salt_julia_name(old, _salt_of(basename(new)))
     PatchVersion.replace_needed!(binpath, old, salted)
@@ -56,7 +56,7 @@ end
 # Set the SONAME of `libpath`, in place, to the salt-substituted form of its
 # current SONAME (length-preserving).  The salt is recovered from the salted file
 # basename `soname`.  Guard: the existing SONAME must contain the "libjulia" token.
-function patchelf_set_soname!(libpath::String, soname::String)
+function set_soname_salted!(libpath::String, soname::String)
     current = PatchVersion.read_soname(libpath)
     @assert current !== nothing && occursin("libjulia", current) "refusing to set SONAME of $libpath: current soname $(repr(current)) is not a libjulia name"
     salted = _salt_julia_name(current, _salt_of(basename(soname)))
@@ -75,8 +75,8 @@ end
 # Platform hooks for Linux
 plat_ext(::LinuxPlatform) = ".so"
 plat_dep_prefix(::LinuxPlatform) = ""
-plat_set_library_id!(::LinuxPlatform, libpath::String, new_id::String) = patchelf_set_soname!(libpath, basename(new_id))
-plat_install_name_change!(::LinuxPlatform, binpath::String, old::String, new::String) = patchelf_replace_needed!(binpath, old, new)
+plat_set_library_id!(::LinuxPlatform, libpath::String, new_id::String) = set_soname_salted!(libpath, basename(new_id))
+plat_install_name_change!(::LinuxPlatform, binpath::String, old::String, new::String) = replace_needed_salted!(binpath, old, new)
 plat_get_deps(::LinuxPlatform, bin::String) = get_dependencies_linux(bin)
 
 # Linux salts by equal-length token substitution (libjulia -> 8-char salt), so the
