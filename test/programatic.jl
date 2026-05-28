@@ -261,6 +261,52 @@
             @test ver.minor == 32767
         end
     end
+
+    @testset "Windows privatization injects manifest + fixes libpath" begin
+        if Sys.iswindows()
+            outdir = mktempdir()
+            libname = "libwinprivtest"
+            libout = joinpath(outdir, libname)
+            link = JuliaC.LinkRecipe(image_recipe=img_lib, outname=libout, rpath=JuliaC.RPATH_BUNDLE)
+            JuliaC.link_products(link)
+            bun = JuliaC.BundleRecipe(link_recipe=link, output_dir=outdir, privatize=true)
+            JuliaC.bundle_products(bun)
+
+            product = joinpath(outdir, "bin", libname * "." * Base.BinaryPlatforms.platform_dlext())
+            @test isfile(product)
+
+            # (a) The product PE now has a .rsrc section (read via ObjectFile, already a dep).
+            rsrc_va = open(product) do io
+                oh = only(JuliaC.ObjectFile.readmeta(io))
+                rsrc = JuliaC.ObjectFile.findfirst(JuliaC.ObjectFile.Sections(oh), ".rsrc")
+                @test rsrc !== nothing
+                rsrc === nothing ? UInt32(0) : UInt32(JuliaC.ObjectFile.section_address(rsrc))
+            end
+
+            # (b) The optional header's ResourceTable data directory now points at .rsrc.
+            #     Read it with raw seek/read to mirror the ld_flags testset's style and to
+            #     independently confirm the COFF patch landed (datadirs_offset reasoning
+            #     verified against a real PE during planning).
+            rt = open(product) do io
+                seek(io, 0x3C); pe_off = read(io, UInt32)
+                opt_hdr = pe_off + 4 + 20                 # PE sig (4) + COFF header (20)
+                seek(io, opt_hdr); magic = read(io, UInt16)
+                # 64-bit: standard(24) + windows64(88) = 112 to the data directories;
+                # 32-bit: standard(24) + BaseOfData(4) + windows32(68) = 96.
+                dd = opt_hdr + (magic == 0x20b ? 112 : 96)
+                seek(io, dd + 0x10)                        # ResourceTable slot
+                (va = read(io, UInt32), size = read(io, UInt32))
+            end
+            @test rt.va == rsrc_va
+            @test rt.va != 0
+            @test rt.size != 0
+
+            # (c) The bundled libjulia.dll no longer contains the "../bin/" prefix.
+            libjulia = joinpath(outdir, "bin", "libjulia.dll")
+            @test isfile(libjulia)
+            @test !occursin("../bin/", String(read(libjulia)))
+        end
+    end
 end
 
 @testset "Programmatic binary (trim)" begin
