@@ -1,6 +1,6 @@
 module PatchVersion
 
-export patch_version, patch_version!
+export patch_version, patch_version!, read_soname, read_needed, set_soname!, replace_needed!
 
 import ObjectFile: ObjectFile, ELFHandle, StrTab, SectionRef, Sections, strtab_lookup,
     ELF, section_offset, section_size
@@ -176,6 +176,57 @@ function _patch_dyn_string!(oh, d, newstr::Vector{UInt8})
     end
     patch_str!(tab, pos, newstr)
     return nothing
+end
+
+"""
+    read_soname(file)::Union{String,Nothing}
+
+Return the `DT_SONAME` string of an ELF shared object, or `nothing` if it has none.
+"""
+read_soname(file) = open(file) do io
+    oh = only(ObjectFile.readmeta(io))
+    es = ELF.ELFDynEntries(oh, [ELF.DT_SONAME])
+    isempty(es) ? nothing : String(strtab_lookup(only(es)))
+end
+
+"""
+    read_needed(file)::Vector{String}
+
+Return all `DT_NEEDED` entries of an ELF shared object, in order.
+"""
+read_needed(file) = open(file) do io
+    oh = only(ObjectFile.readmeta(io))
+    String[String(strtab_lookup(d)) for d in ELF.ELFDynEntries(oh, [ELF.DT_NEEDED])]
+end
+
+"""
+    set_soname!(file, newname)
+
+Rewrite the `DT_SONAME` of an ELF shared object in place.  Errors if `file` has
+no `DT_SONAME` or if `newname` is longer than the current soname.
+"""
+function set_soname!(file, newname)
+    open(file, read=true, write=true, create=false, truncate=false) do io
+        oh = only(ObjectFile.readmeta(io))
+        es = ELF.ELFDynEntries(oh, [ELF.DT_SONAME])
+        isempty(es) && error("no DT_SONAME in $file")
+        _patch_dyn_string!(oh, only(es), Vector{UInt8}(newname))
+    end
+end
+
+"""
+    replace_needed!(file, oldname, newname)
+
+Rename the single `DT_NEEDED` entry equal to `oldname` to `newname`, in place.
+Asserts exactly one entry matches `oldname`; errors if `newname` is longer.
+"""
+function replace_needed!(file, oldname, newname)
+    open(file, read=true, write=true, create=false, truncate=false) do io
+        oh = only(ObjectFile.readmeta(io))
+        matches = filter(d -> strtab_lookup(d) == oldname, ELF.ELFDynEntries(oh, [ELF.DT_NEEDED]))
+        @assert length(matches) == 1 "expected exactly one DT_NEEDED == \"$oldname\" in $file, got $(length(matches))"
+        _patch_dyn_string!(oh, only(matches), Vector{UInt8}(newname))
+    end
 end
 
 end
