@@ -161,10 +161,14 @@ _dyn_string_offsets(oh) =
 
 # Overwrite the .dynstr string referenced by dynamic entry `d` with `newstr`,
 # in place (length-preserving or shorter; patch_str! errors on grow).  Refuses
-# unsupported ELF variants and refuses to patch if another dynamic string starts
-# strictly inside the byte range being overwritten.
-function _patch_dyn_string!(oh, d, newstr::Vector{UInt8})
-    @assert ObjectFile.is64bit(oh) && ObjectFile.endianness(oh) == :LittleEndian "only ELF64 little-endian is supported"
+# non-ELF inputs and refuses to patch if another dynamic string starts strictly
+# inside the byte range being overwritten.
+function _patch_dyn_string!(oh::ELFHandle, d, newstr::Vector{UInt8})
+    # Works for any ELF class/endianness: every multi-byte field read goes through
+    # ObjectFile.jl/StructIO, which select the 32- vs 64-bit struct layout and
+    # byte-swap per the parsed ELF header, and the string bytes we overwrite are
+    # raw ASCII (not endianness/width sensitive).  The `oh::ELFHandle` type
+    # restriction is the only guard we need (rejects MachO/COFF up front).
     pos = Int(ObjectFile.deref(d).d_val)
     tab = _dynstr_section(oh, d)
     seek(tab, pos)
