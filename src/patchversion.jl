@@ -65,7 +65,7 @@ function patch_version!(infile::AbstractString, oldver::Vector{UInt8}, newver::V
         error(string("Length mismatch; can't overwrite $oldver with $newver"))
     end
 
-    open(infile, read=true, write=true, create=false, truncate=false) do io
+    open(infile; read=true, write=true, create=false, truncate=false) do io
         oh = only(ObjectFile.readmeta(io))
         tab = findfirst(Sections(oh), ".dynstr")
 
@@ -195,7 +195,7 @@ Rewrite the `DT_SONAME` of an ELF shared object in place.  Errors if `file` has
 no `DT_SONAME` or if `newname` is longer than the current soname.
 """
 function set_soname!(file, newname)
-    open(file, read=true, write=true, create=false, truncate=false) do io
+    open(file; read=true, write=true, create=false, truncate=false) do io
         oh = only(ObjectFile.readmeta(io))
         es = ELF.ELFDynEntries(oh, [ELF.DT_SONAME])
         isempty(es) && error("no DT_SONAME in $file")
@@ -210,7 +210,7 @@ Rename the single `DT_NEEDED` entry equal to `oldname` to `newname`, in place.
 Asserts exactly one entry matches `oldname`; errors if `newname` is longer.
 """
 function replace_needed!(file, oldname, newname)
-    open(file, read=true, write=true, create=false, truncate=false) do io
+    open(file; read=true, write=true, create=false, truncate=false) do io
         oh = only(ObjectFile.readmeta(io))
         matches = filter(d -> strtab_lookup(d) == oldname, ELF.ELFDynEntries(oh, [ELF.DT_NEEDED]))
         @assert length(matches) == 1 "expected exactly one DT_NEEDED == \"$oldname\" in $file, got $(length(matches))"
