@@ -53,13 +53,13 @@ function generate_manifest_xml(identity_name::AbstractString, dll_names)
     return Vector{UInt8}(String(take!(io)))
 end
 
-# Build a per-product SxS assembly identity from the product basename (avoids identity
-# clashes in the SxS cache when multiple bundles co-reside). Sanitized to the name-safe
-# charset; generic prefix (no domain language).
-function manifest_identity_for(product_path::AbstractString)
+# Build a per-product SxS assembly identity from the product basename plus the
+# privatization salt (avoids identity clashes in the SxS cache when multiple bundles
+# co-reside). Sanitized to the name-safe charset; generic prefix (no domain language).
+function manifest_identity_for(product_path::AbstractString, salt::AbstractString)
     stem = first(splitext(basename(product_path)))      # strip .exe/.dll
     safe = replace(stem, r"[^A-Za-z0-9._-]" => "_")
-    return string("JuliaC.PrivateRuntime.", safe)
+    return string("JuliaC.PrivateRuntime.", safe, ".", salt)
 end
 
 # The libjulia DLLs the manifest may redirect, in canonical order.
@@ -67,16 +67,16 @@ const LIBJULIA_DLL_CANDIDATES =
     ("libjulia.dll", "libjulia-internal.dll", "libjulia-codegen.dll")
 
 """
-    inject_private_manifest!(product_path, dll_names)
+    inject_private_manifest!(product_path, dll_names, salt)
 
 Add the SxS `RT_MANIFEST` resource (listing `dll_names`) to the PE at `product_path`:
 build a `.rsrc` payload (precompiled header ++ generated manifest ++ 4-byte pad), add it as
 a `.rsrc` section with mingw `objcopy`, then patch the COFF optional header's ResourceTable
 data directory and the section's internal manifest address/size fields.
 """
-function inject_private_manifest!(product_path, dll_names)
+function inject_private_manifest!(product_path, dll_names, salt::AbstractString)
     header = read(joinpath(TEMPLATE_DIR, "rsrc.bin"))
-    manifest = generate_manifest_xml(manifest_identity_for(product_path), dll_names)
+    manifest = generate_manifest_xml(manifest_identity_for(product_path, salt), dll_names)
 
     # Build the section payload: header ++ manifest ++ pad-to-4-bytes.
     sectionfile = joinpath(dirname(product_path), "rsrc.bin")
@@ -168,7 +168,7 @@ end
 Windows privatization entry point: inject the SxS manifest into the built product and fix
 the bundled libjulia.dll's embedded libpath. Standalone; does not use the plat_* hooks.
 """
-function privatize_libjulia_windows!(recipe::BundleRecipe)
+function privatize_libjulia_windows!(recipe::BundleRecipe, salt::String)
     try
         # On Windows the bundle libdir is "bin" and the product + DLLs are co-located there.
         bindir = joinpath(recipe.output_dir, recipe.libdir)
@@ -178,7 +178,7 @@ function privatize_libjulia_windows!(recipe::BundleRecipe)
         dll_names = present_libjulia_dlls(bindir)
         isempty(dll_names) && error("no libjulia*.dll found in $bindir to privatize")
 
-        inject_private_manifest!(product, dll_names)
+        inject_private_manifest!(product, dll_names, salt)
         fix_libjulia_libpath!(libjulia)
     catch e
         error("Failed to privatize libjulia on Windows", e)
