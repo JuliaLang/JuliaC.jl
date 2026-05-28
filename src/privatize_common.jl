@@ -17,6 +17,15 @@ plat_set_library_id!(::PrivatizePlatform, libpath::String, new_id::String) = not
 plat_install_name_change!(::PrivatizePlatform, binpath::String, old::String, new::String) = error("Unsupported platform change")
 plat_get_deps(::PrivatizePlatform, bin::String) = String[]
 
+# Salt a library basename. Default = prepend (macOS: install_name_tool relocates
+# strings so growing the name is fine). Linux overrides this with an equal-length
+# token substitution so the in-place .dynstr patch never needs to grow a string.
+plat_salted_basename(::PrivatizePlatform, base::String, salt::String) = string(salt, "_", base)
+
+# Whether the embedded dep_libs string is salted by prepend (macOS, default) or
+# by token substitution (Linux). See replace_dep_libs.
+plat_dep_libs_prepend(::PrivatizePlatform) = true
+
 function privatize_libjulia_common!(recipe::BundleRecipe, platform::PrivatizePlatform)
     bundle_root = recipe.output_dir
     product = recipe.link_recipe.outname
@@ -53,7 +62,7 @@ function privatize_libjulia_common!(recipe::BundleRecipe, platform::PrivatizePla
     # 1) Salt all real library files
     for p in real_files
         base = basename(p)
-        salted_base = string(salt, "_", base)
+        salted_base = plat_salted_basename(platform, base, salt)
         salted_path = joinpath(dirname(p), salted_base)
         cp(p, salted_path; force=true)
         chmod(salted_path, filemode(salted_path) | 0o200)  # ensure writable for patching
@@ -63,7 +72,7 @@ function privatize_libjulia_common!(recipe::BundleRecipe, platform::PrivatizePla
         salted_paths[p] = salted_path
         salted_filenames[base] = salted_base
         if startswith(base, "libjulia.") && !islink(salted_path)
-            replace_dep_libs(salted_path, salt)
+            replace_dep_libs(salted_path, salt; prepend=plat_dep_libs_prepend(platform))
         end
     end
 
@@ -75,7 +84,7 @@ function privatize_libjulia_common!(recipe::BundleRecipe, platform::PrivatizePla
         target_base = basename(target)
         haskey(salted_filenames, target_base) || continue
         salted_target_base = salted_filenames[target_base]
-        salted_link = joinpath(dir, string(salt, "_", link_base))
+        salted_link = joinpath(dir, plat_salted_basename(platform, link_base, salt))
         try
             symlink(salted_target_base, salted_link)
         catch e
@@ -119,7 +128,7 @@ end
 
 const DEP_LIBS_LENGTH = 512 # This is technically 1024 bytes, but we use 512 to be safe
 
-function replace_dep_libs(file, salt)
+function replace_dep_libs(file, salt; prepend::Bool)
     obj = only(readmeta(open(file, "r")))
     syms = collect(Symbols(obj))
     syms_names = symbol_name.(syms)
@@ -128,7 +137,12 @@ function replace_dep_libs(file, salt)
     fileh = open(file, "r+")
     filem = Mmap.mmap(fileh)
     data = String(filem[offset : (offset + DEP_LIBS_LENGTH - 1)])
-    new_data = Vector{UInt8}(replace(data, "libjulia" => salt * "_" * "libjulia")[begin:DEP_LIBS_LENGTH])
+    # prepend (macOS): libjulia -> <salt>_libjulia (grows; that section is padded).
+    # substitution (Linux): libjulia -> <salt> (same length; matches the in-place
+    # .dynstr SONAME/NEEDED rewrites so the loader resolves the renamed deps).
+    new = prepend ? replace(data, "libjulia" => salt * "_" * "libjulia") :
+                    replace(data, "libjulia" => salt)
+    new_data = Vector{UInt8}(new[begin:DEP_LIBS_LENGTH])
     filem[offset : (offset + DEP_LIBS_LENGTH - 1)] .= new_data
     Mmap.sync!(filem)
 end
