@@ -125,3 +125,63 @@ function inject_private_manifest!(product_path, dll_names)
     end
     return nothing
 end
+
+"""
+    fix_libjulia_libpath!(libjulia_path)
+
+Strip the stale `../bin/` prefix from the bundled `libjulia.dll`'s embedded, colon-separated
+library search path (rewriting `@../bin/` -> `@`), in place, NUL-terminated. The rewrite only
+removes bytes, so it never grows the string and is safe to do in place.
+"""
+function fix_libjulia_libpath!(libjulia_path)
+    if !isfile(libjulia_path)
+        error("Unable to open libjulia.dll at $(libjulia_path)")
+    end
+    open(libjulia_path, read = true, write = true) do io
+        needle = "../bin/"
+        readuntil(io, needle)
+        skip(io, -length(needle))
+        libpath_offset = position(io)
+
+        libpath = split(String(readuntil(io, UInt8(0))), ":")
+        libpath = map(libpath) do l
+            if startswith(l, "../bin/")
+                return l[8:end]
+            elseif startswith(l, "@../bin/")
+                return "@" * l[9:end]
+            end
+            return l
+        end
+
+        seek(io, libpath_offset)
+        write(io, join(libpath, ":"))
+        write(io, UInt8(0))
+    end
+end
+
+# The libjulia DLLs actually present in the bundle bin/ dir, in canonical order.
+function present_libjulia_dlls(bindir)
+    return [dll for dll in LIBJULIA_DLL_CANDIDATES if isfile(joinpath(bindir, dll))]
+end
+
+"""
+Windows privatization entry point: inject the SxS manifest into the built product and fix
+the bundled libjulia.dll's embedded libpath. Standalone; does not use the plat_* hooks.
+"""
+function privatize_libjulia_windows!(recipe::BundleRecipe)
+    try
+        # On Windows the bundle libdir is "bin" and the product + DLLs are co-located there.
+        bindir = joinpath(recipe.output_dir, recipe.libdir)
+        product = recipe.link_recipe.outname
+        libjulia = joinpath(bindir, "libjulia.dll")
+
+        dll_names = present_libjulia_dlls(bindir)
+        isempty(dll_names) && error("no libjulia*.dll found in $bindir to privatize")
+
+        inject_private_manifest!(product, dll_names)
+        fix_libjulia_libpath!(libjulia)
+    catch e
+        error("Failed to privatize libjulia on Windows", e)
+    end
+    return nothing
+end
