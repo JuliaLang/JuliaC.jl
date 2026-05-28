@@ -19,18 +19,10 @@ using ObjectFile
 using StructIO
 import ObjectFile: COFF, Sections, section_address, section_offset, findfirst
 
-# The 88-byte precompiled `.rsrc` resource-directory header. It encodes the tree
-#   RT_MANIFEST(24) -> resource id 2 -> langid 0x409 -> IMAGE_RESOURCE_DATA_ENTRY @ 0x48
-# with the data entry's OffsetToData (0x48) and Size (0x4c) fields zeroed; those are
-# patched after objcopy places the section and the loader-relative VA is known.
-# Located via RelocatableFolders @path exactly like SCRIPTS_DIR, so it survives app
-# bundling / relocation.
+# Dir holding rsrc.bin (88-byte precompiled RT_MANIFEST header); @path so it survives bundling.
 const TEMPLATE_DIR = @path joinpath(@__DIR__, "template")
 
-# Offsets of the two patched UInt32 fields, measured from the start of the .rsrc section.
-# Derived by decoding rsrc.bin against the PE format spec:
-#   https://learn.microsoft.com/windows/win32/debug/pe-format#the-rsrc-section
-# (0x00..0x47 = directory tree, 0x48 = IMAGE_RESOURCE_DATA_ENTRY).
+# Offsets of the two patched UInt32 fields from the start of the .rsrc section (IMAGE_RESOURCE_DATA_ENTRY @ 0x48).
 const MANIFEST_ADDRESS_OFFSET = UInt(0x48)  # IMAGE_RESOURCE_DATA_ENTRY.OffsetToData
 const MANIFEST_SIZE_OFFSET    = UInt(0x4c)  # IMAGE_RESOURCE_DATA_ENTRY.Size
 
@@ -53,9 +45,7 @@ function generate_manifest_xml(identity_name::AbstractString, dll_names)
     return Vector{UInt8}(String(take!(io)))
 end
 
-# Build a per-product SxS assembly identity from the product basename (avoids identity
-# clashes in the SxS cache when multiple bundles co-reside). Sanitized to the name-safe
-# charset; generic prefix (no domain language).
+# Per-product SxS assembly identity from the product basename (avoids SxS-cache clashes), name-safe.
 function manifest_identity_for(product_path::AbstractString)
     stem = first(splitext(basename(product_path)))      # strip .exe/.dll
     safe = replace(stem, r"[^A-Za-z0-9._-]" => "_")
