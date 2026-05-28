@@ -85,7 +85,7 @@ function inject_private_manifest!(product_path, dll_names)
     rm(sectionfile)
 
     # Re-open and patch the headers now that objcopy has placed the section.
-    open(product_path, read=true, write=true, create=false, truncate=false) do io
+    open(product_path; read=true, write=true, create=false, truncate=false) do io
         oh = only(ObjectFile.readmeta(io))
         rsrc_section = findfirst(Sections(oh), ".rsrc")
         rsrc_section === nothing && error("objcopy did not create a .rsrc section in $product_path")
@@ -127,7 +127,7 @@ function fix_libjulia_libpath!(libjulia_path)
     if !isfile(libjulia_path)
         error("Unable to open libjulia.dll at $(libjulia_path)")
     end
-    open(libjulia_path, read = true, write = true) do io
+    open(libjulia_path; read = true, write = true) do io
         needle = "../bin/"
         readuntil(io, needle)
         skip(io, -length(needle))
