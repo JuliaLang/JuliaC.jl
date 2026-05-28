@@ -141,4 +141,41 @@ end
 patch_version(i, o, n, out; kwargs...) = patch_version(i, Vector{UInt8}(o), Vector{UInt8}(n), out; kwargs...)
 patch_version!(i, o, n; kwargs...) = patch_version!(i, Vector{UInt8}(o), Vector{UInt8}(n); kwargs...)
 
+# --- DT_SONAME / DT_NEEDED in-place patching (same-length substitution) -------
+#
+# These pure-Julia operations replace the patchelf shell-outs previously used by
+# the Linux privatization path.  They patch the dynamic string table (.dynstr)
+# in place via patch_str! above, which errors if the new string is longer than
+# the old one (we never grow the string table).
+
+# The .dynstr SectionRef that a dynamic entry's string lives in, located via the
+# .dynamic section's sh_link (the canonical pointer to the dynamic string table).
+_dynstr_section(oh, d) = Sections(oh)[ObjectFile.deref(ObjectFile.Section(d)).sh_link + 1]
+
+# Byte offsets (into .dynstr) of every DT_SONAME/DT_NEEDED string -- the only
+# dynamic strings we ever patch, used to guard against corrupting an overlapping
+# (tail-merged) entry.
+_dyn_string_offsets(oh) =
+    Int[Int(ObjectFile.deref(d).d_val) for tag in (ELF.DT_SONAME, ELF.DT_NEEDED)
+                                       for d in ELF.ELFDynEntries(oh, [tag])]
+
+# Overwrite the .dynstr string referenced by dynamic entry `d` with `newstr`,
+# in place (length-preserving or shorter; patch_str! errors on grow).  Refuses
+# unsupported ELF variants and refuses to patch if another dynamic string starts
+# strictly inside the byte range being overwritten.
+function _patch_dyn_string!(oh, d, newstr::Vector{UInt8})
+    @assert ObjectFile.is64bit(oh) && ObjectFile.endianness(oh) == :LittleEndian "only ELF64 little-endian is supported"
+    pos = Int(ObjectFile.deref(d).d_val)
+    tab = _dynstr_section(oh, d)
+    seek(tab, pos)
+    oldlen = length(readuntil(ObjectFile.handle(tab), UInt8(0)))
+    for o in _dyn_string_offsets(oh)
+        if pos < o < pos + oldlen
+            error("Refusing in-place .dynstr patch at $pos: a dynamic string starts at $o inside [$pos, $(pos+oldlen))")
+        end
+    end
+    patch_str!(tab, pos, newstr)
+    return nothing
+end
+
 end
