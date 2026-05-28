@@ -13,8 +13,8 @@ struct LinuxPlatform <: PrivatizePlatform end
 # Per-platform hooks (implemented in platform-specific files)
 plat_ext(::PrivatizePlatform) = error("Unsupported platform")
 plat_dep_prefix(::PrivatizePlatform) = error("Unsupported platform")
-plat_set_library_id!(::PrivatizePlatform, libpath::String, new_id::String) = nothing
-plat_install_name_change!(::PrivatizePlatform, binpath::String, old::String, new::String) = error("Unsupported platform change")
+plat_set_library_id!(::PrivatizePlatform, libpath::String, new_id::String, salt::String) = nothing
+plat_install_name_change!(::PrivatizePlatform, binpath::String, old::String, new::String, salt::String) = error("Unsupported platform change")
 plat_get_deps(::PrivatizePlatform, bin::String) = String[]
 
 # Salt a library basename. Default = prepend (macOS: install_name_tool relocates
@@ -68,7 +68,7 @@ function privatize_libjulia_common!(recipe::BundleRecipe, platform::PrivatizePla
         chmod(salted_path, filemode(salted_path) | 0o200)  # ensure writable for patching
         push!(originals_to_remove, p)
         # Update library identity for salted copy (install_name/SONAME) via unified hook
-        plat_set_library_id!(platform, salted_path, plat_dep_prefix(platform) * salted_base)
+        plat_set_library_id!(platform, salted_path, plat_dep_prefix(platform) * salted_base, salt)
         salted_paths[p] = salted_path
         salted_filenames[base] = salted_base
         if startswith(base, "libjulia.") && !islink(salted_path)
@@ -114,7 +114,7 @@ function privatize_libjulia_common!(recipe::BundleRecipe, platform::PrivatizePla
             end
         end
         for (old, new) in reps
-            plat_install_name_change!(platform, t, old, new)
+            plat_install_name_change!(platform, t, old, new, salt)
         end
     end
 

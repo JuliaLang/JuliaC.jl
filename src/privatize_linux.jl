@@ -12,19 +12,11 @@ High-level steps:
 """
 
 function privatize_libjulia_linux!(recipe::BundleRecipe)
-    try
-        salted_paths = privatize_libjulia_common!(recipe, LinuxPlatform())
+    salted_paths = privatize_libjulia_common!(recipe, LinuxPlatform())
 
-        # Version-stamp symbol versions to avoid interposition (Linux-specific)
-        if salted_paths !== nothing
-            try
-                version_stamp_symbols!(salted_paths, recipe.link_recipe.outname)
-            catch e
-                error("Failed to patch symbol versions on salted libraries", e)
-            end
-        end
-    catch e
-        error("Failed to privatize libjulia on Linux", e)
+    # Version-stamp symbol versions to avoid interposition (Linux-specific)
+    if salted_paths !== nothing
+        version_stamp_symbols!(salted_paths, recipe.link_recipe.outname)
     end
 end
 
@@ -36,31 +28,24 @@ get_dependencies_linux(bin::String) = PatchVersion.read_needed(bin)
 # (e.g. "libjulia.so.1.12.6").  Salting therefore cannot reuse the salted file
 # basename verbatim: that would grow the in-place string.  Instead we substitute
 # the leading "libjulia" token in the live SONAME/NEEDED string with the same
-# salt, which is length-preserving.  Every libjulia* basename begins with the
-# 8-char "libjulia" token, so the salt is the leading 8 characters of the salted
-# basename, recovered here.
-_salt_of(salted_basename::String) = first(salted_basename, length("libjulia"))
-
-# Substitute the leading "libjulia" token of `name` with `salt`, preserving length.
+# salt, which is length-preserving (the "libjulia" token is always 8 chars).
 _salt_julia_name(name::String, salt::String) = replace(name, "libjulia" => salt; count = 1)
 
-# Rename the single DT_NEEDED entry `old` (a "libjulia*" name) in `binpath` to the
-# salt-substituted form derived from the salted dependency basename `new`.
-# Length-preserving: the version-bearing `old` string keeps its byte length.
-function replace_needed_salted!(binpath::String, old::String, new::String)
+# Rename the single DT_NEEDED entry `old` (a "libjulia*" name) in `binpath` to its
+# salt-substituted form.  Length-preserving: the version-bearing `old` string keeps
+# its byte length.
+function replace_needed_salted!(binpath::String, old::String, salt::String)
     @assert occursin("libjulia", old) "refusing to rewrite DT_NEEDED \"$old\" in $binpath: not a libjulia entry"
-    salted = _salt_julia_name(old, _salt_of(basename(new)))
-    PatchVersion.replace_needed!(binpath, old, salted)
+    PatchVersion.replace_needed!(binpath, old, _salt_julia_name(old, salt))
 end
 
-# Set the SONAME of `libpath`, in place, to the salt-substituted form of its
-# current SONAME (length-preserving).  The salt is recovered from the salted file
-# basename `soname`.  Guard: the existing SONAME must contain the "libjulia" token.
-function set_soname_salted!(libpath::String, soname::String)
+# Set the SONAME of `libpath`, in place, to the salt-substituted form of its current
+# SONAME (length-preserving).  Guard: the existing SONAME must contain the "libjulia"
+# token.
+function set_soname_salted!(libpath::String, salt::String)
     current = PatchVersion.read_soname(libpath)
     @assert current !== nothing && occursin("libjulia", current) "refusing to set SONAME of $libpath: current soname $(repr(current)) is not a libjulia name"
-    salted = _salt_julia_name(current, _salt_of(basename(soname)))
-    PatchVersion.set_soname!(libpath, salted)
+    PatchVersion.set_soname!(libpath, _salt_julia_name(current, salt))
 end
 
 function version_stamp_symbols!(salted_paths::Dict{String,String}, product::String)
@@ -75,8 +60,8 @@ end
 # Platform hooks for Linux
 plat_ext(::LinuxPlatform) = ".so"
 plat_dep_prefix(::LinuxPlatform) = ""
-plat_set_library_id!(::LinuxPlatform, libpath::String, new_id::String) = set_soname_salted!(libpath, basename(new_id))
-plat_install_name_change!(::LinuxPlatform, binpath::String, old::String, new::String) = replace_needed_salted!(binpath, old, new)
+plat_set_library_id!(::LinuxPlatform, libpath::String, new_id::String, salt::String) = set_soname_salted!(libpath, salt)
+plat_install_name_change!(::LinuxPlatform, binpath::String, old::String, new::String, salt::String) = replace_needed_salted!(binpath, old, salt)
 plat_get_deps(::LinuxPlatform, bin::String) = get_dependencies_linux(bin)
 
 # Linux salts by equal-length token substitution (libjulia -> 8-char salt), so the

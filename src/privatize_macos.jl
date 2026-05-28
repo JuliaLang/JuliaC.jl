@@ -49,8 +49,8 @@ end
 # Platform hooks for macOS
 plat_ext(::MacOSPlatform) = ".dylib"
 plat_dep_prefix(::MacOSPlatform) = "@rpath/"
-plat_set_library_id!(::MacOSPlatform, libpath::String, new_id::String) = install_name_id!(libpath, new_id)
-plat_install_name_change!(::MacOSPlatform, binpath::String, old::String, new::String) = install_name_change!(binpath, old, new)
+plat_set_library_id!(::MacOSPlatform, libpath::String, new_id::String, salt::String) = install_name_id!(libpath, new_id)
+plat_install_name_change!(::MacOSPlatform, binpath::String, old::String, new::String, salt::String) = install_name_change!(binpath, old, new)
 plat_get_deps(::MacOSPlatform, bin::String) = get_dependencies_macos(bin)
 
 function _codesign_bundle!(recipe::BundleRecipe)
