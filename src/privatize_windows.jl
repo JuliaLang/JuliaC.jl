@@ -65,3 +65,63 @@ end
 # The libjulia DLLs the manifest may redirect, in canonical order.
 const LIBJULIA_DLL_CANDIDATES =
     ("libjulia.dll", "libjulia-internal.dll", "libjulia-codegen.dll")
+
+"""
+    inject_private_manifest!(product_path, dll_names)
+
+Add the SxS `RT_MANIFEST` resource (listing `dll_names`) to the PE at `product_path`:
+build a `.rsrc` payload (precompiled header ++ generated manifest ++ 4-byte pad), add it as
+a `.rsrc` section with mingw `objcopy`, then patch the COFF optional header's ResourceTable
+data directory and the section's internal manifest address/size fields.
+"""
+function inject_private_manifest!(product_path, dll_names)
+    header = read(joinpath(TEMPLATE_DIR, "rsrc.bin"))
+    manifest = generate_manifest_xml(manifest_identity_for(product_path), dll_names)
+
+    # Build the section payload: header ++ manifest ++ pad-to-4-bytes.
+    sectionfile = joinpath(dirname(product_path), "rsrc.bin")
+    open(sectionfile, "w") do rsrc_bin
+        write(rsrc_bin, header)
+        write(rsrc_bin, manifest)
+        if length(manifest) % sizeof(UInt32) != 0
+            padding_size = sizeof(UInt32) - length(manifest) % sizeof(UInt32)
+            write(rsrc_bin, zeros(UInt8, padding_size))
+        end
+    end
+
+    # Add the section using objcopy from the mingw artifact already used for linking.
+    objcopy = mingw_tool("objcopy.exe")            # WINDOWS-CI-ONLY: artifact + run
+    run(`$objcopy --add-section .rsrc=$sectionfile --set-section-flags .rsrc=data $product_path`)
+    rm(sectionfile)
+
+    # Re-open and patch the headers now that objcopy has placed the section.
+    open(product_path, read=true, write=true, create=false, truncate=false) do io
+        oh = only(ObjectFile.readmeta(io))
+        rsrc_section = findfirst(Sections(oh), ".rsrc")
+        rsrc_section === nothing && error("objcopy did not create a .rsrc section in $product_path")
+
+        # 1) Patch the optional header's ResourceTable data directory.
+        magic = oh.opt_header.standard.Magic
+        datadirs_offset = if magic == COFF.OPTHEADER_STANDARD_MAGIC32
+            oh.header_offset + sizeof(COFF.COFFHeader) + sizeof(COFF.COFFOptionalHeaderStandard) +
+                sizeof(UInt32) + sizeof(COFF.COFFOptionalHeaderWindows32)
+        elseif magic == COFF.OPTHEADER_STANDARD_MAGIC64
+            oh.header_offset + sizeof(COFF.COFFHeader) + sizeof(COFF.COFFOptionalHeaderStandard) +
+                sizeof(COFF.COFFOptionalHeaderWindows64)
+        else
+            error("unexpected COFF optional-header magic: 0x$(string(magic, base=16))")
+        end
+        seek(oh, datadirs_offset + PatchVersion.fieldname_offset(COFF.COFFDataDirectories, :ResourceTable))
+        pack(ObjectFile.handle(oh).io, COFF.COFFImageDataDirectory(
+            #= VirtualAddress =# section_address(rsrc_section),
+            #= Size          =# rsrc_section.section.VirtualSize,
+        ))
+
+        # 2) Patch the .rsrc data-entry's manifest address + size (relative until VA known).
+        seek(oh, section_offset(rsrc_section) + MANIFEST_ADDRESS_OFFSET)
+        write(ObjectFile.handle(oh).io, UInt32(section_address(rsrc_section) + sizeof(header)))
+        seek(oh, section_offset(rsrc_section) + MANIFEST_SIZE_OFFSET)
+        write(ObjectFile.handle(oh).io, UInt32(length(manifest)))
+    end
+    return nothing
+end
