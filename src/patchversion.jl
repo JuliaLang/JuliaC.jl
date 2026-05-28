@@ -141,34 +141,19 @@ end
 patch_version(i, o, n, out; kwargs...) = patch_version(i, Vector{UInt8}(o), Vector{UInt8}(n), out; kwargs...)
 patch_version!(i, o, n; kwargs...) = patch_version!(i, Vector{UInt8}(o), Vector{UInt8}(n); kwargs...)
 
-# --- DT_SONAME / DT_NEEDED in-place patching (same-length substitution) -------
-#
-# These pure-Julia operations replace the patchelf shell-outs previously used by
-# the Linux privatization path.  They patch the dynamic string table (.dynstr)
-# in place via patch_str! above, which errors if the new string is longer than
-# the old one (we never grow the string table).
+# DT_SONAME / DT_NEEDED in-place patching via patch_str! (same-length or shorter; never grows).
 
-# The .dynstr SectionRef that a dynamic entry's string lives in, located via the
-# .dynamic section's sh_link (the canonical pointer to the dynamic string table).
+# The .dynstr section a dynamic entry's string lives in (via the .dynamic sh_link).
 _dynstr_section(oh, d) = Sections(oh)[ObjectFile.deref(ObjectFile.Section(d)).sh_link + 1]
 
-# Byte offsets (into .dynstr) of every DT_SONAME/DT_NEEDED string -- the only
-# dynamic strings we ever patch, used to guard against corrupting an overlapping
-# (tail-merged) entry.
+# .dynstr byte offsets of every DT_SONAME/DT_NEEDED string (to guard tail-merged neighbours).
 _dyn_string_offsets(oh) =
     Int[Int(ObjectFile.deref(d).d_val) for tag in (ELF.DT_SONAME, ELF.DT_NEEDED)
                                        for d in ELF.ELFDynEntries(oh, [tag])]
 
-# Overwrite the .dynstr string referenced by dynamic entry `d` with `newstr`,
-# in place (length-preserving or shorter; patch_str! errors on grow).  Refuses
-# non-ELF inputs and refuses to patch if another dynamic string starts strictly
-# inside the byte range being overwritten.
+# Overwrite dynamic entry `d`'s .dynstr string with `newstr` in place (errors on grow or overlap).
 function _patch_dyn_string!(oh::ELFHandle, d, newstr::Vector{UInt8})
-    # Works for any ELF class/endianness: every multi-byte field read goes through
-    # ObjectFile.jl/StructIO, which select the 32- vs 64-bit struct layout and
-    # byte-swap per the parsed ELF header, and the string bytes we overwrite are
-    # raw ASCII (not endianness/width sensitive).  The `oh::ELFHandle` type
-    # restriction is the only guard we need (rejects MachO/COFF up front).
+    # Any ELF class/endianness: ObjectFile.jl decodes fields per the header; string bytes are raw ASCII.
     pos = Int(ObjectFile.deref(d).d_val)
     tab = _dynstr_section(oh, d)
     seek(tab, pos)

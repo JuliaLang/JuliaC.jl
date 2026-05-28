@@ -17,13 +17,10 @@ plat_set_library_id!(::PrivatizePlatform, libpath::String, new_id::String, salt:
 plat_install_name_change!(::PrivatizePlatform, binpath::String, old::String, new::String, salt::String) = error("Unsupported platform change")
 plat_get_deps(::PrivatizePlatform, bin::String) = String[]
 
-# Salt a library basename. Default = prepend (macOS: install_name_tool relocates
-# strings so growing the name is fine). Linux overrides this with an equal-length
-# token substitution so the in-place .dynstr patch never needs to grow a string.
+# Salt a basename. Default: prepend (macOS grows freely); Linux overrides with equal-length substitution.
 plat_salted_basename(::PrivatizePlatform, base::String, salt::String) = string(salt, "_", base)
 
-# Whether the embedded dep_libs string is salted by prepend (macOS, default) or
-# by token substitution (Linux). See replace_dep_libs.
+# Whether dep_libs is salted by prepend (macOS) or token substitution (Linux). See replace_dep_libs.
 plat_dep_libs_prepend(::PrivatizePlatform) = true
 
 function privatize_libjulia_common!(recipe::BundleRecipe, platform::PrivatizePlatform)
@@ -137,9 +134,7 @@ function replace_dep_libs(file, salt; prepend::Bool)
     fileh = open(file, "r+")
     filem = Mmap.mmap(fileh)
     data = String(filem[offset : (offset + DEP_LIBS_LENGTH - 1)])
-    # prepend (macOS): libjulia -> <salt>_libjulia (grows; that section is padded).
-    # substitution (Linux): libjulia -> <salt> (same length; matches the in-place
-    # .dynstr SONAME/NEEDED rewrites so the loader resolves the renamed deps).
+    # prepend (macOS): libjulia -> <salt>_libjulia (grows). substitution (Linux): libjulia -> <salt> (same length).
     new = prepend ? replace(data, "libjulia" => salt * "_" * "libjulia") :
                     replace(data, "libjulia" => salt)
     new_data = Vector{UInt8}(new[begin:DEP_LIBS_LENGTH])

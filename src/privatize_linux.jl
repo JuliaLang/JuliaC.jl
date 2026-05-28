@@ -23,25 +23,16 @@ end
 # Linux-specific dependency extraction (pure-Julia, via PatchVersion).
 get_dependencies_linux(bin::String) = PatchVersion.read_needed(bin)
 
-# On Linux the SONAME / DT_NEEDED strings carry the two-component version
-# (e.g. "libjulia.so.1.12") while the files on disk carry the full version
-# (e.g. "libjulia.so.1.12.6").  Salting therefore cannot reuse the salted file
-# basename verbatim: that would grow the in-place string.  Instead we substitute
-# the leading "libjulia" token in the live SONAME/NEEDED string with the same
-# salt, which is length-preserving (the "libjulia" token is always 8 chars).
+# Substitute the 8-char "libjulia" token with the 8-char salt (length-preserving).
 _salt_julia_name(name::String, salt::String) = replace(name, "libjulia" => salt; count = 1)
 
-# Rename the single DT_NEEDED entry `old` (a "libjulia*" name) in `binpath` to its
-# salt-substituted form.  Length-preserving: the version-bearing `old` string keeps
-# its byte length.
+# Rename the libjulia DT_NEEDED entry `old` to its salted form, in place.
 function replace_needed_salted!(binpath::String, old::String, salt::String)
     @assert occursin("libjulia", old) "refusing to rewrite DT_NEEDED \"$old\" in $binpath: not a libjulia entry"
     PatchVersion.replace_needed!(binpath, old, _salt_julia_name(old, salt))
 end
 
-# Set the SONAME of `libpath`, in place, to the salt-substituted form of its current
-# SONAME (length-preserving).  Guard: the existing SONAME must contain the "libjulia"
-# token.
+# Set `libpath`'s SONAME to the salted form of its current (libjulia) SONAME, in place.
 function set_soname_salted!(libpath::String, salt::String)
     current = PatchVersion.read_soname(libpath)
     @assert current !== nothing && occursin("libjulia", current) "refusing to set SONAME of $libpath: current soname $(repr(current)) is not a libjulia name"
@@ -64,9 +55,7 @@ plat_set_library_id!(::LinuxPlatform, libpath::String, new_id::String, salt::Str
 plat_install_name_change!(::LinuxPlatform, binpath::String, old::String, new::String, salt::String) = replace_needed_salted!(binpath, old, salt)
 plat_get_deps(::LinuxPlatform, bin::String) = get_dependencies_linux(bin)
 
-# Linux salts by equal-length token substitution (libjulia -> 8-char salt), so the
-# in-place .dynstr SONAME/NEEDED rewrites never grow a string. dep_libs is salted
-# by the same substitution rather than by prepend.
+# Linux salts by equal-length token substitution (not prepend) so in-place patches never grow.
 plat_salted_basename(::LinuxPlatform, base::String, salt::String) = replace(base, "libjulia" => salt; count = 1)
 plat_dep_libs_prepend(::LinuxPlatform) = false
 
