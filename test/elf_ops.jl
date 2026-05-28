@@ -99,6 +99,60 @@ if Sys.islinux()
         reset_libs()
     end
 
+    @testset "synthetic: no unsalted libjulia SONAME/NEEDED survives (Linux)" begin
+        using Patchelf_jll: patchelf
+        ver = "$(VERSION.major).$(VERSION.minor)"
+        libdir = abspath(joinpath(Sys.BINDIR, "..", "lib"))
+        juliadir = joinpath(libdir, "julia")
+        srccore = joinpath(libdir, "libjulia.so.$ver")
+        srcint  = joinpath(juliadir, "libjulia-internal.so.$ver")
+        # Only run if this Julia ships the expected libjulia layout.
+        if isfile(srccore) && isfile(srcint)
+            tmp = mktempdir()
+            bundle_julia = joinpath(tmp, "lib", "julia")
+            mkpath(bundle_julia)
+            # Copy real core + internal into the synthetic bundle.  srccore/srcint
+            # are version symlinks, so follow them to get regular library files.
+            core = joinpath(bundle_julia, "libjulia.so.$ver")
+            internal = joinpath(bundle_julia, "libjulia-internal.so.$ver")
+            cp(srccore, core; force=true, follow_symlinks=true); chmod(core, 0o755)
+            cp(srcint, internal; force=true, follow_symlinks=true); chmod(internal, 0o755)
+            # Fabricate a product .so that DT_NEEDEDs libjulia: copy internal (it
+            # already NEEDS libjulia in normal builds) and give it its own product
+            # SONAME, as a real build's product carries (not a libjulia name).
+            product = joinpath(tmp, "lib", "libsyntheticproduct.so")
+            cp(srcint, product; force=true, follow_symlinks=true); chmod(product, 0o755)
+            set_soname!(product, "libsyntheticproduct.so")
+
+            # Drive the real common privatization on a LinuxPlatform.
+            recipe = JuliaC.BundleRecipe(
+                link_recipe = JuliaC.LinkRecipe(outname = product),
+                output_dir = tmp,
+                libdir = "lib",
+                privatize = true,
+            )
+            JuliaC.privatize_libjulia_common!(recipe, JuliaC.LinuxPlatform())
+
+            # After privatization: walk the bundle and assert no real (non-symlink)
+            # library has a SONAME or DT_NEEDED still containing "libjulia".
+            for (root, _, files) in walkdir(joinpath(tmp, "lib"))
+                for f in files
+                    p = joinpath(root, f)
+                    islink(p) && continue
+                    occursin(".so", f) || continue
+                    sn = strip(read(`$(patchelf()) --print-soname $p`, String))
+                    @test !occursin("libjulia", sn)
+                    for nd in split(strip(read(`$(patchelf()) --print-needed $p`, String)), "\n")
+                        @test !occursin("libjulia", nd)
+                    end
+                end
+            end
+            rm(tmp; force=true, recursive=true)
+        else
+            @info "skipping synthetic privatization check: libjulia layout not found at $libdir"
+        end
+    end
+
     # Leave the working copies cleaned up; -bak.so are the committed sources.
     rm(joinpath(ELFDIR, "liboracle.so"); force=true)
     rm(joinpath(ELFDIR, "libclient.so"); force=true)
