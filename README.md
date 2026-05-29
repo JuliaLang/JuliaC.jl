@@ -23,8 +23,13 @@ pkg> app add JuliaC
 
 Optional: enable `Pkg` app shims on your shell PATH so you can run `juliac` directly:
 
+Bash:
 ```bash
-echo 'export PATH="$HOME/.julia/bin:$PATH"' >> ~/.bashrc    # adapt for your shell
+echo 'export PATH="$HOME/.julia/bin:$PATH"' >> ~/.bashrc 
+```
+Fish:
+```fish
+echo 'fish_add_path $HOME/.julia/bin' >> ~/.config/fish/config.fish
 ```
 
 ### Quick start (CLI)
