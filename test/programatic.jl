@@ -307,6 +307,68 @@
             @test !occursin("../bin/", String(read(libjulia)))
         end
     end
+
+    @testset "Privatized library loads its own runtime copy (Windows)" begin
+        # Behavioral guarantee of the SxS-manifest privatization: when the bundled,
+        # privatized product is loaded into a Julia process that already has the
+        # runtime loaded, the activation context steers the product to its own
+        # sibling runtime DLLs rather than the ones already on PATH. The result is
+        # two DISTINCT copies of the runtime libraries visible in `Libdl.dllist()`:
+        # the host process's already-loaded copy plus the bundled private copy.
+        if Sys.iswindows()
+            outdir = mktempdir()
+            libname = "libwinprivloadtest"
+            libout = joinpath(outdir, libname)
+            link = JuliaC.LinkRecipe(image_recipe=img_lib, outname=libout, rpath=JuliaC.RPATH_BUNDLE)
+            JuliaC.link_products(link)
+            bun = JuliaC.BundleRecipe(link_recipe=link, output_dir=outdir, privatize=true)
+            JuliaC.bundle_products(bun)
+
+            bindir = joinpath(outdir, "bin")
+            product = joinpath(bindir, libname * "." * Base.BinaryPlatforms.platform_dlext())
+            @test isfile(product)
+            @test isfile(joinpath(bindir, "libjulia.dll"))
+
+            # Load the privatized product from a fresh Julia process (which already
+            # has the runtime loaded), then inspect `Libdl.dllist()`. We run it in a
+            # subprocess so the host test process is unaffected, mirroring the Unix
+            # "Julia dlopen test" above.
+            product_literal = repr(product)
+            bindir_literal = repr(bindir)
+            snippet = """
+                using Libdl
+                # Capture the runtime libraries already loaded by this host process.
+                before = filter(p -> occursin("libjulia", lowercase(basename(p))), Libdl.dllist())
+                h = Libdl.dlopen($product_literal, Libdl.RTLD_LOCAL)
+                try
+                    # Confirm the exported function works once loaded.
+                    r = ccall(Libdl.dlsym(h, :jc_add_one), Cint, (Cint,), 41)
+                    println("RESULT=", r)
+                    after = filter(p -> occursin("libjulia", lowercase(basename(p))), Libdl.dllist())
+                    # Distinct directories holding a libjulia*.dll: expect the host's
+                    # copy plus the bundled private copy (>= 2 distinct directories).
+                    dirs = unique(map(p -> lowercase(abspath(dirname(p))), after))
+                    bundled = lowercase(abspath($bindir_literal))
+                    println("HOST_LIBJULIA_COUNT=", length(before))
+                    println("DISTINCT_DIRS=", length(dirs))
+                    println("HAS_BUNDLED=", bundled in dirs)
+                finally
+                    try Libdl.dlclose(h) catch end
+                end
+                """
+            out = read(`$(Base.julia_cmd()) --startup-file=no --history-file=no -e $snippet`, String)
+
+            # The exported symbol still resolves through the privatized runtime.
+            @test occursin("RESULT=42", out)
+            # The bundled directory is one of the distinct runtime-library locations.
+            @test occursin("HAS_BUNDLED=true", out)
+            # At least two distinct directories now host a copy of the runtime libs:
+            # the host/system one and the bundled private one.
+            m = match(r"DISTINCT_DIRS=(\d+)", out)
+            @test m !== nothing
+            @test parse(Int, m.captures[1]) >= 2
+        end
+    end
 end
 
 @testset "Programmatic binary (trim)" begin
