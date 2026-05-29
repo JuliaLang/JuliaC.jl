@@ -306,21 +306,22 @@ end
 
 # https://github.com/JuliaLang/JuliaC.jl/issues/106 + #124
 # Simulate the Pkg-app shim env by running `julia -m JuliaC` with
-# JULIA_LOAD_PATH=<JuliaC project>/. This requires $ROOT to contain a
-# resolved Manifest.toml, which is only true in a dev checkout — Pkg-installed
-# JuliaC has its Manifest.toml gitignored. Gate the test on an opt-in env var
-# set in JuliaC's own CI (.github/workflows/ci.yml), so it doesn't run when
-# JuliaC is exercised as an installed package (e.g. from Julia's CI).
-if get(ENV, "JULIAC_TEST_PKG_APP_SHIM_SIM", "") == "1"
+# JULIA_LOAD_PATH pointing at a JuliaC-containing project, the way the shim does.
 @testset "Pkg app JULIA_LOAD_PATH isolation (#106)" begin
-    isfile(joinpath(ROOT, "Manifest.toml")) ||
-        error("JULIAC_TEST_PKG_APP_SHIM_SIM=1 requires a resolved \$ROOT/Manifest.toml")
+    projectroot = mktempdir()
+    setup = """
+    using Pkg
+    Pkg.develop(path=$(repr(ROOT)))
+    Pkg.instantiate()
+    """
+    @test success(`$(Base.julia_cmd()) --startup-file=no --history-file=no --project=$(projectroot) -e $setup`)
+
     outdir = mktempdir()
     exename = "app_pkgapp"
     cmd = addenv(
-        `$(Base.julia_cmd()) --startup-file=no --history-file=no --project=$(ROOT) -m JuliaC
+        `$(Base.julia_cmd()) --startup-file=no --history-file=no --project=$(projectroot) -m JuliaC
          --output-exe $exename $(TEST_PROJ) --bundle $outdir --verbose`,
-        "JULIA_LOAD_PATH" => ROOT * "/",
+        "JULIA_LOAD_PATH" => projectroot * "/",
     )
     @test success(cmd)
     actual_exe = Sys.iswindows() ? joinpath(outdir, "bin", exename * ".exe") : joinpath(outdir, "bin", exename)
@@ -329,7 +330,6 @@ if get(ENV, "JULIAC_TEST_PKG_APP_SHIM_SIM", "") == "1"
         output = read(`$actual_exe`, String)
         @test occursin("Fast compilation test!", output)
     end
-end
 end
 
 # End-to-end: install JuliaC as a Pkg app, invoke the shim, compile a project.
