@@ -55,26 +55,16 @@ end
 # Per-platform hooks (implemented in platform-specific files)
 plat_ext(::PrivatizePlatform) = error("Unsupported platform")
 
-# How a dependency is referenced from a binary's load metadata: macOS uses
-# `@rpath/<name>`, Linux uses the bare `<name>`. Applied uniformly to the
-# library id and to every dependency reference, so the salted reference is built
-# the same way everywhere.
+# How a dependency is referenced in load metadata (macOS `@rpath/<name>`, Linux bare `<name>`); applied uniformly to the id and every dependency reference.
 plat_dep_ref(::PrivatizePlatform, name::String) = error("Unsupported platform")
 
-# Build the platform's name-salting function for this run. This is the ONLY
-# place the salt is turned into a name transform; macOS prepends (may grow),
-# Linux substitutes a same-length token (length-preserving). Returns `name -> salted_name`.
+# Build this run's name-salting function (`name -> salted_name`); the only place salt becomes a transform — macOS prepends (may grow), Linux substitutes same-length.
 plat_make_renamer(::PrivatizePlatform, salt::String) = error("Unsupported platform")
 
-# Set a salted library's own identity (install_name id / SONAME). Each platform
-# resolves the new id from the shared `SaltMap` (its `rename` function is the one
-# definition of salting): macOS uses the salted basename as `@rpath/<base>`,
-# Linux salts the library's current SONAME (which may differ from the basename).
-# No raw salt is threaded in.
+# Set a salted library's own identity (install_name id / SONAME), resolved from the `SaltMap`: macOS uses `@rpath/<salted base>`, Linux salts the current SONAME.
 plat_set_library_id!(::PrivatizePlatform, smap, libpath::String) = nothing
 
-# Rewrite one dependency reference in `binpath` from `old` to `new`, both
-# already fully-resolved. No raw salt is passed.
+# Rewrite one dependency reference in `binpath` from `old` to `new` (both already fully-resolved).
 plat_install_name_change!(::PrivatizePlatform, binpath::String, old::String, new::String) =
     error("Unsupported platform change")
 
@@ -125,8 +115,7 @@ function privatize_libjulia_common!(recipe::BundleRecipe, platform::PrivatizePla
         cp(p, salted_path; force=true)
         chmod(salted_path, filemode(salted_path) | 0o200)  # ensure writable for patching
         push!(originals_to_remove, p)
-        # Update library identity for salted copy (install_name/SONAME); the
-        # platform resolves the new id from the shared map.
+        # Update the salted copy's identity (install_name/SONAME); the platform resolves the new id from the shared map.
         plat_set_library_id!(platform, smap, salted_path)
         salted_paths[p] = salted_path
         if startswith(base, "libjulia.") && !islink(salted_path)
@@ -153,10 +142,7 @@ function privatize_libjulia_common!(recipe::BundleRecipe, platform::PrivatizePla
                 error("Failed to create symlink $salted_link -> $salted_target_base", e)
             end
         end
-        # Record that this symlink basename should be rewritten to the salted target
-        # This is necessary because the DT_NEEDED entries may point to a symlink.
-        # The symlink resolves to a real file, so its salted reference is the
-        # salted *target*, not `salt_name(link_base)`.
+        # Record the symlink basename so DT_NEEDED entries that name the symlink are recognized as bundled (and thus rewritten).
         smap.basenames[link_base] = salted_target_base
         # Schedule original symlink for removal
         push!(originals_to_remove, lnk)
@@ -211,9 +197,7 @@ function replace_dep_libs(file, smap::SaltMap)
     Mmap.sync!(filem)
 end
 
-# The `dep_libs` blob is a list of bare library stems separated by `:` (and
-# NUL-padded). Salt each stem with the platform renamer so the result matches
-# the salted basenames exactly, with no per-platform prepend/substitute branch here.
+# Salt each stem in the colon-separated, NUL-padded `dep_libs` blob with the platform renamer (no per-platform branch here).
 function salt_dep_libs(data::AbstractString, smap::SaltMap)
     return replace(data, r"[^:\0]+" => m -> salt_name(smap, m))
 end
@@ -223,10 +207,7 @@ function replacements_for(bin::String, smap::SaltMap, platform::PrivatizePlatfor
     for dep in plat_get_deps(platform, bin)
         b = basename(dep)
         if haskey(smap.basenames, b)
-            # Salt the live dependency string itself (not the recorded real-file
-            # basename): a soname like libjulia.so.1.12 must map to <salt>.so.1.12,
-            # matching the salted symlink we create and staying length-preserving on
-            # Linux. basenames is consulted only as the "was this bundled?" guard.
+            # Salt the live dep string (not the recorded basename) so a soname like libjulia.so.1.12 maps to <salt>.so.1.12 — length-preserving; basenames is only the "bundled?" guard.
             new_dep = plat_dep_ref(platform, salt_name(smap, b))
             push!(seen, (dep, new_dep))
         end

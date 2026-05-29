@@ -23,10 +23,7 @@ end
 # Linux-specific dependency extraction (pure-Julia, via PatchVersion).
 get_dependencies_linux(bin::String) = PatchVersion.read_needed(bin)
 
-# Substitute the 8-char "libjulia" token with the 8-char salt (length-preserving).
-# This is Linux's name-salting function, used for basenames, SONAMEs, NEEDED
-# entries and dep_libs stems alike. Same length in == same length out, so every
-# in-place .dynstr patch is non-growing.
+# Substitute the 8-char "libjulia" token with the 8-char salt (length-preserving): Linux's one name-salting function for basenames, SONAMEs, NEEDED and dep_libs stems.
 _salt_julia_name(name::AbstractString, salt::String) =
     replace(String(name), "libjulia" => salt; count = 1)
 
@@ -36,10 +33,7 @@ function replace_needed_salted!(binpath::String, old::String, new::String)
     PatchVersion.replace_needed!(binpath, old, new)
 end
 
-# Set `libpath`'s SONAME to the salted form of its *current* SONAME, in place.
-# We salt the current SONAME (e.g. `libjulia.so.1.12`) rather than the basename
-# (e.g. `libjulia.so.1.12.6`) because the two can differ; salting via the map's
-# `rename` keeps it length-preserving and consistent with every other name.
+# Set `libpath`'s SONAME to the salted form of its current SONAME (e.g. `libjulia.so.1.12`, which can differ from the basename), via the map's renamer so it stays length-preserving.
 function set_soname_salted!(smap::SaltMap, libpath::String)
     current = PatchVersion.read_soname(libpath)
     @assert current !== nothing && occursin("libjulia", current) "refusing to set SONAME of $libpath: current soname $(repr(current)) is not a libjulia name"
@@ -59,9 +53,7 @@ end
 plat_ext(::LinuxPlatform) = ".so"
 # DT_NEEDED / SONAME strings are bare names on Linux (no @rpath).
 plat_dep_ref(::LinuxPlatform, name::String) = name
-# Linux's renamer salts by equal-length "libjulia" token substitution (not
-# prepend) so every in-place .dynstr patch is length-preserving. This single
-# function is used for basenames, SONAMEs, NEEDED entries and dep_libs stems.
+# Linux's renamer: equal-length "libjulia" token substitution (not prepend), so in-place .dynstr patches stay length-preserving.
 plat_make_renamer(::LinuxPlatform, salt::String) = name -> _salt_julia_name(name, salt)
 plat_set_library_id!(::LinuxPlatform, smap::SaltMap, libpath::String) = set_soname_salted!(smap, libpath)
 plat_install_name_change!(::LinuxPlatform, binpath::String, old::String, new::String) = replace_needed_salted!(binpath, old, new)

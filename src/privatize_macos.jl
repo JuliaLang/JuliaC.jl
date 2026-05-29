@@ -46,10 +46,7 @@ function install_name_change!(binpath::String, old_id::String, new_id::String)
     run(`install_name_tool -change $(old_id) $(new_id) $(binpath)`)
 end
 
-# macOS's renamer prepends `<salt>_` to the libjulia token. install_name_tool
-# can grow strings, so this is unconstrained in length. Names without a libjulia
-# token (e.g. unrelated dep_libs stems) are left untouched, matching the prior
-# substring-replace behavior.
+# macOS's renamer prepends `<salt>_` to the libjulia token (install_name_tool can grow strings); names without the token are left untouched.
 _salt_julia_name_macos(name::AbstractString, salt::String) =
     replace(String(name), "libjulia" => string(salt, "_", "libjulia"))
 
