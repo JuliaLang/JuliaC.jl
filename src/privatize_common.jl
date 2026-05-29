@@ -223,7 +223,11 @@ function replacements_for(bin::String, smap::SaltMap, platform::PrivatizePlatfor
     for dep in plat_get_deps(platform, bin)
         b = basename(dep)
         if haskey(smap.basenames, b)
-            new_dep = plat_dep_ref(platform, smap.basenames[b])
+            # Salt the live dependency string itself (not the recorded real-file
+            # basename): a soname like libjulia.so.1.12 must map to <salt>.so.1.12,
+            # matching the salted symlink we create and staying length-preserving on
+            # Linux. basenames is consulted only as the "was this bundled?" guard.
+            new_dep = plat_dep_ref(platform, salt_name(smap, b))
             push!(seen, (dep, new_dep))
         end
     end
