@@ -11,6 +11,22 @@ function bundle_products(recipe::BundleRecipe)
         return
     end
 
+    # Wipe top-level subdirs of a previous bundle so re-runs are idempotent
+    # (PackageCompiler's bundle_cert/bundle_artifacts cp without force). Only
+    # touch directories: top-level files are link products (the main artifact
+    # plus, on Windows, its sibling `.dll.a` import library) and must survive.
+    # Skip any subdir that contains the link output (programmatic API allows
+    # outname inside output_dir).
+    out_abs = abspath(recipe.output_dir)
+    outname_abs = abspath(recipe.link_recipe.outname)
+    if isdir(out_abs)
+        for entry in readdir(out_abs, join=true)
+            isdir(entry) || continue
+            startswith(relpath(outname_abs, abspath(entry)), "..") || continue
+            rm(entry; force=true, recursive=true)
+        end
+    end
+
     # Ensure the bundle output directory exists
     mkpath(recipe.output_dir)
 
@@ -24,22 +40,14 @@ function bundle_products(recipe::BundleRecipe)
 
     # Re-home bundled libraries into the desired bundle layout
     libdir = recipe.libdir
-    # Move `<output_dir>/julia` -> `<output_dir>/<libdir>/julia`
+    # Move `<output_dir>/julia` -> `<output_dir>/<libdir>/julia`.
     src_julia_dir = joinpath(recipe.output_dir, "julia")
     if isdir(src_julia_dir)
         dest_root = joinpath(recipe.output_dir, libdir)
         mkpath(dest_root)
         dest_julia_dir = joinpath(dest_root, "julia")
         if abspath(src_julia_dir) != abspath(dest_julia_dir)
-            if isdir(dest_julia_dir)
-                # Track this directory for removal in the consolidation function
-                dirs_to_remove = [dest_julia_dir]
-            else
-                dirs_to_remove = String[]
-            end
             mv(src_julia_dir, dest_julia_dir; force=true)
-        else
-            dirs_to_remove = String[]
         end
         # On Windows, place required DLLs next to the executable (in bin/) for loader discovery
         if Sys.iswindows()
@@ -55,8 +63,6 @@ function bundle_products(recipe::BundleRecipe)
                 end
             end
         end
-    else
-        dirs_to_remove = String[]
     end
 
     # Determine where to place the built product within the bundle
@@ -82,11 +88,6 @@ function bundle_products(recipe::BundleRecipe)
     # On macOS, codesign the bundled binaries to avoid Gatekeeper kills when loading
     if Sys.isapple()
         _codesign_bundle!(recipe)
-    end
-
-    # Now perform all directory removals at once
-    for dir in dirs_to_remove
-        rm(dir; force=true, recursive=true)
     end
 end
 
