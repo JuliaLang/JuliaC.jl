@@ -146,11 +146,6 @@ patch_version!(i, o, n; kwargs...) = patch_version!(i, Vector{UInt8}(o), Vector{
 # The .dynstr section a dynamic entry's string lives in (via the .dynamic sh_link).
 _dynstr_section(oh, d) = Sections(oh)[ObjectFile.deref(ObjectFile.Section(d)).sh_link + 1]
 
-# .dynstr byte offsets of every DT_SONAME/DT_NEEDED string (to guard tail-merged neighbours).
-_dyn_string_offsets(oh) =
-    Int[Int(ObjectFile.deref(d).d_val) for tag in (ELF.DT_SONAME, ELF.DT_NEEDED)
-                                       for d in ELF.ELFDynEntries(oh, [tag])]
-
 # Overwrite dynamic entry `d`'s .dynstr string with `newstr` in place (errors on grow or overlap).
 function _patch_dyn_string!(oh::ELFHandle, d, newstr::Vector{UInt8})
     # Any ELF class/endianness: ObjectFile.jl decodes fields per the header; string bytes are raw ASCII.
@@ -158,10 +153,17 @@ function _patch_dyn_string!(oh::ELFHandle, d, newstr::Vector{UInt8})
     tab = _dynstr_section(oh, d)
     seek(tab, pos)
     oldlen = length(readuntil(ObjectFile.handle(tab), UInt8(0)))
-    for o in _dyn_string_offsets(oh)
-        if pos < o < pos + oldlen
-            error("Refusing in-place .dynstr patch at $pos: a dynamic string starts at $o inside [$pos, $(pos+oldlen))")
+    # Refuse if the target's [string+NUL] range overlaps any other .dynstr record (tail-merge: target is a longer string's shared suffix, so even an equal-length overwrite corrupts it).
+    seek(ObjectFile.handle(tab).io, section_offset(tab))
+    bytes = read(ObjectFile.handle(tab).io, Int(section_size(tab)))
+    start = 0
+    for i in 0:length(bytes)-1
+        bytes[i + 1] == 0x00 || continue
+        rlen = i - start
+        if rlen > 0 && start != pos && !(start + rlen < pos || start > pos + oldlen)
+            error("Refusing in-place .dynstr patch at $pos [len $oldlen]: overlaps string at $start (tail-merged string table)")
         end
+        start = i + 1
     end
     patch_str!(tab, pos, newstr)
     return nothing
