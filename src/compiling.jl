@@ -37,30 +37,6 @@ function _start_spinner(message::String; io::IO=stderr)
     return finished, task
 end
 
-"""
-Inject HostCPUFeatures preferences into a project's LocalPreferences.toml
-and ensure the extras section in Project.toml references HostCPUFeatures.
-
-Merges with any existing preferences/extras rather than overwriting.
-"""
-function _inject_trim_preferences(project_dir::String)
-    proj_path = joinpath(project_dir, "Project.toml")
-    proj = isfile(proj_path) ? TOML.parsefile(proj_path) : Dict{String,Any}()
-    extras = get!(Dict{String,Any}, proj, "extras")
-    extras["HostCPUFeatures"] = "3e5b6fbb-0976-4d2c-9146-d79de83f2fb0"
-    open(proj_path, "w") do io
-        TOML.print(io, proj)
-    end
-
-    prefs_path = joinpath(project_dir, "LocalPreferences.toml")
-    prefs = isfile(prefs_path) ? TOML.parsefile(prefs_path) : Dict{String,Any}()
-    hcf = get!(Dict{String,Any}, prefs, "HostCPUFeatures")
-    hcf["freeze_cpu_target"] = true
-    open(prefs_path, "w") do io
-        TOML.print(io, prefs)
-    end
-end
-
 function compile_products(recipe::ImageRecipe)
     # Only strip IR / metadata if not `--trim=no`
     strip_args = String[]
@@ -134,10 +110,16 @@ function compile_products(recipe::ImageRecipe)
     env_overrides = Dict{String,Any}("JULIA_LOAD_PATH" => nothing)
 
     if is_trim_enabled(recipe)
-        # Inject HostCPUFeatures preferences directly into the temp project copy so
-        # the preference is visible without JULIA_LOAD_PATH manipulation.
+        # Inject the HostCPUFeatures `freeze_cpu_target` preference directly into the
+        # temp project copy so it's visible without JULIA_LOAD_PATH manipulation.
         tmp_project_dir = isdir(project_arg) ? project_arg : dirname(project_arg)
-        _inject_trim_preferences(tmp_project_dir)
+        Preferences.set_preferences!(
+            (Base.UUID("3e5b6fbb-0976-4d2c-9146-d79de83f2fb0"), "HostCPUFeatures"),
+            "freeze_cpu_target" => true;
+            project_toml = joinpath(tmp_project_dir, "Project.toml"),
+            export_prefs = true,
+            force = true,
+        )
     end
 
     inst_cmd = addenv(`$(Base.julia_cmd(cpu_target=precompile_cpu_target)) --project=$project_arg -e "using Pkg; Pkg.instantiate(); Pkg.precompile()"`, env_overrides...)
