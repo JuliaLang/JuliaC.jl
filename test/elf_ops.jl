@@ -63,7 +63,7 @@ if Sys.islinux()
     @testset "grow guard rejects a longer replacement" begin
         reset_libs()
         n = joinpath(ELFDIR, "liboracle.so")
-        @test_throws "Length mismatch" set_soname!(n, "liboracle_WAYTOOLONG.so")
+        @test_throws "is longer than the existing entry" set_soname!(n, "liboracle_WAYTOOLONG.so")
         reset_libs()
     end
 

@@ -21,7 +21,10 @@ function patch_str!(tab::SectionRef, pos, newstr::Vector{UInt8})
     old = readuntil(ObjectFile.handle(tab), UInt8(0))
     pad = length(old) - length(newstr)
     if pad < 0
-        error(string("Length mismatch; can't overwrite $old with $newstr"))
+        error("""
+              cannot patch ELF string table in place: replacement $(repr(String(copy(newstr)))) \
+              ($(length(newstr)) bytes) is longer than the existing entry $(repr(String(copy(old)))) \
+              ($(length(old)) bytes). In-place .dynstr patching can only shrink or keep length, never grow.""")
     elseif pad > 0
         newstr = vcat(newstr, fill(UInt8(0), pad))
     end
@@ -62,7 +65,10 @@ Update version strings and hashes in-place.  Touches the .dynstr, .gnu.version_d
 function patch_version!(infile::AbstractString, oldver::Vector{UInt8}, newver::Vector{UInt8};
                         patch_def=true, patch_need=true, patch_strtab=true)
     if length(oldver) < length(newver)
-        error(string("Length mismatch; can't overwrite $oldver with $newver"))
+        error("""
+              cannot patch version string in place: new version $(repr(String(copy(newver)))) \
+              ($(length(newver)) bytes) is longer than old version $(repr(String(copy(oldver)))) \
+              ($(length(oldver)) bytes); the replacement must be the same length or shorter.""")
     end
 
     open(infile; read=true, write=true, create=false, truncate=false) do io
