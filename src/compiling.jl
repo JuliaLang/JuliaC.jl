@@ -104,27 +104,22 @@ function compile_products(recipe::ImageRecipe)
     end
     project_arg = isdir(project_arg) ? tmp_project : joinpath(tmp_project, basename(project_arg))
 
-    # Drop any inherited JULIA_LOAD_PATH (e.g. set by the Pkg-app shim to
-    # JuliaC's own env) so the subprocess falls back to the default
-    # ["@", "@v#.#", "@stdlib"] and `using Pkg` resolves via @stdlib.
+    # Always clear JULIA_LOAD_PATH to prevent parent environment leakage
+    # (e.g. when JuliaC is invoked as a Pkg app, the shim sets JULIA_LOAD_PATH
+    # to JuliaC's own project, which would break user project compilation — #106/#124).
     env_overrides = Dict{String,Any}("JULIA_LOAD_PATH" => nothing)
-    tmp_prefs_env = nothing
+
     if is_trim_enabled(recipe)
-        load_path_sep = Sys.iswindows() ? ";" : ":"
-        # Create a temporary environment with a LocalPreferences.toml that will be added to JULIA_LOAD_PATH.
-        tmp_prefs_env = mktempdir()
-        open(joinpath(tmp_prefs_env, "Project.toml"), "w") do io
-            println(io, "[extras]")
-            println(io, "HostCPUFeatures = \"3e5b6fbb-0976-4d2c-9146-d79de83f2fb0\"")
-        end
-        # Write LocalPreferences.toml with the trim preferences
-        open(joinpath(tmp_prefs_env, "LocalPreferences.toml"), "w") do io
-            println(io, "[HostCPUFeatures]")
-            println(io, "freeze_cpu_target = true")
-        end
-        # Leading separator → an empty entry that expands to the default load path,
-        # then append the temp prefs env.
-        env_overrides["JULIA_LOAD_PATH"] = load_path_sep * tmp_prefs_env
+        # Inject the HostCPUFeatures `freeze_cpu_target` preference directly into the
+        # temp project copy so it's visible without JULIA_LOAD_PATH manipulation.
+        tmp_project_dir = isdir(project_arg) ? project_arg : dirname(project_arg)
+        Preferences.set_preferences!(
+            (Base.UUID("3e5b6fbb-0976-4d2c-9146-d79de83f2fb0"), "HostCPUFeatures"),
+            "freeze_cpu_target" => true;
+            project_toml = joinpath(tmp_project_dir, "Project.toml"),
+            export_prefs = true,
+            force = true,
+        )
     end
 
     inst_cmd = addenv(`$(Base.julia_cmd(cpu_target=precompile_cpu_target)) --project=$project_arg -e "using Pkg; Pkg.instantiate(); Pkg.precompile()"`, env_overrides...)
