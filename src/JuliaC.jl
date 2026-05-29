@@ -59,6 +59,7 @@ Base.@kwdef mutable struct BundleRecipe
     output_dir::Union{String, Nothing} = nothing # if nothing, don't bundle
     libdir::String = Sys.iswindows() ? "bin" : "lib"
     privatize::Bool = false
+    bundle_lazy_artifacts::Bool = false
 end
 
 include("compiling.jl")
@@ -92,6 +93,7 @@ function _print_usage(io::IO=stdout)
     println(io, "  --output-bc <path>          Output LLVM bitcode archive")
     println(io, "  --project <path>            Project to instantiate/precompile")
     println(io, "  --bundle <dir>              Bundle libjulia, stdlibs, and artifacts")
+    println(io, "  --bundle-lazy-artifacts     Also bundle lazy artifacts (off by default)")
     println(io, "  --privatize                 Privatize bundled libjulia (Unix)")
     println(io, "  --trim[=mode]               Strip IR/metadata (e.g. --trim=safe)")
     println(io, "  --compile-ccallable         Export ccallable entrypoints")
@@ -171,6 +173,8 @@ function _parse_cli_args(args::Vector{String})
                 bundle_recipe.output_dir = args[i+1]
                 i += 1
             end
+        elseif arg == "--bundle-lazy-artifacts"
+            bundle_recipe.bundle_lazy_artifacts = true
         elseif arg == "--privatize"
             bundle_recipe.privatize = true
         elseif arg == "--verbose"
@@ -186,6 +190,8 @@ function _parse_cli_args(args::Vector{String})
 
     link_recipe.outname == "" && error("No output file specified")
     image_recipe.file == "" && error("No input file specified")
+    bundle_recipe.bundle_lazy_artifacts && !bundle_specified &&
+            error("--bundle-lazy-artifacts requires --bundle")
 
     if bundle_specified
         if bundle_recipe.output_dir === nothing
