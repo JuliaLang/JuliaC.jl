@@ -36,9 +36,9 @@ Fields:
 `rename` and `basenames` are consistent by construction: every value in
 `basenames` equals `rename` applied to its key.
 """
-struct SaltMap
+struct SaltMap{F}
     salt::String
-    rename::Function
+    rename::F
     basenames::Dict{String,String}
 end
 
