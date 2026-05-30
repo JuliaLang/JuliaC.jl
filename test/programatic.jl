@@ -309,12 +309,7 @@
     end
 
     @testset "Privatized library loads its own runtime copy (Windows)" begin
-        # Behavioral guarantee of the SxS-manifest privatization: when the bundled,
-        # privatized product is loaded into a Julia process that already has the
-        # runtime loaded, the activation context steers the product to its own
-        # sibling runtime DLLs rather than the ones already on PATH. The result is
-        # two DISTINCT copies of the runtime libraries visible in `Libdl.dllist()`:
-        # the host process's already-loaded copy plus the bundled private copy.
+        # SxS-manifest guarantee: loaded into a process that already has the runtime, the product loads its own sibling DLLs, so Libdl.dllist() shows two distinct runtime copies.
         if Sys.iswindows()
             outdir = mktempdir()
             libname = "libwinprivloadtest"
@@ -329,10 +324,7 @@
             @test isfile(product)
             @test isfile(joinpath(bindir, "libjulia.dll"))
 
-            # Load the privatized product from a fresh Julia process (which already
-            # has the runtime loaded), then inspect `Libdl.dllist()`. We run it in a
-            # subprocess so the host test process is unaffected, mirroring the Unix
-            # "Julia dlopen test" above.
+            # Load the product in a fresh Julia process (which already has the runtime loaded) and inspect Libdl.dllist(), mirroring the Unix "Julia dlopen test" above.
             product_literal = repr(product)
             bindir_literal = repr(bindir)
             snippet = """
@@ -345,8 +337,7 @@
                     r = ccall(Libdl.dlsym(h, :jc_add_one), Cint, (Cint,), 41)
                     println("RESULT=", r)
                     after = filter(p -> occursin("libjulia", lowercase(basename(p))), Libdl.dllist())
-                    # Distinct directories holding a libjulia*.dll: expect the host's
-                    # copy plus the bundled private copy (>= 2 distinct directories).
+                    # Distinct dirs holding a libjulia*.dll: host copy + bundled copy (>= 2).
                     dirs = unique(map(p -> lowercase(abspath(dirname(p))), after))
                     bundled = lowercase(abspath($bindir_literal))
                     println("HOST_LIBJULIA_COUNT=", length(before))
@@ -362,8 +353,7 @@
             @test occursin("RESULT=42", out)
             # The bundled directory is one of the distinct runtime-library locations.
             @test occursin("HAS_BUNDLED=true", out)
-            # At least two distinct directories now host a copy of the runtime libs:
-            # the host/system one and the bundled private one.
+            # >= 2 distinct dirs now host the runtime libs: host/system + bundled.
             m = match(r"DISTINCT_DIRS=(\d+)", out)
             @test m !== nothing
             @test parse(Int, m.captures[1]) >= 2
