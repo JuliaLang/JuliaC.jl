@@ -67,12 +67,8 @@ if Sys.islinux()
         reset_libs()
     end
 
-    @testset "set_soname! errors when there is no DT_SONAME" begin
+    @testset "replace_needed! errors when no entry matches" begin
         reset_libs()
-        # libc has no soname-free guarantee; instead test our explicit error by
-        # constructing a copy and stripping its soname is overkill -- assert the
-        # error message path directly on a known-good lib by asking for a missing
-        # entry via replace_needed!.
         c = joinpath(ELFDIR, "libclient.so")
         @test_throws AssertionError replace_needed!(c, "libdoesnotexist.so", "libx.so")
         reset_libs()
@@ -111,15 +107,12 @@ if Sys.islinux()
             tmp = mktempdir()
             bundle_julia = joinpath(tmp, "lib", "julia")
             mkpath(bundle_julia)
-            # Copy real core + internal into the synthetic bundle.  srccore/srcint
-            # are version symlinks, so follow them to get regular library files.
+            # Copy real core + internal into the bundle (follow_symlinks: srccore/srcint are version symlinks).
             core = joinpath(bundle_julia, "libjulia.so.$ver")
             internal = joinpath(bundle_julia, "libjulia-internal.so.$ver")
             cp(srccore, core; force=true, follow_symlinks=true); chmod(core, 0o755)
             cp(srcint, internal; force=true, follow_symlinks=true); chmod(internal, 0o755)
-            # Fabricate a product .so that DT_NEEDEDs libjulia: copy internal (it
-            # already NEEDS libjulia in normal builds) and give it its own product
-            # SONAME, as a real build's product carries (not a libjulia name).
+            # Fabricate a product .so that NEEDs libjulia (copy internal, which already does) with its own non-libjulia SONAME.
             product = joinpath(tmp, "lib", "libsyntheticproduct.so")
             cp(srcint, product; force=true, follow_symlinks=true); chmod(product, 0o755)
             set_soname!(product, "libsyntheticproduct.so")
@@ -133,8 +126,7 @@ if Sys.islinux()
             )
             JuliaC.privatize_libjulia_common!(recipe, JuliaC.LinuxPlatform())
 
-            # After privatization: walk the bundle and assert no real (non-symlink)
-            # library has a SONAME or DT_NEEDED still containing "libjulia".
+            # After privatization, assert no real (non-symlink) library has a SONAME or DT_NEEDED containing "libjulia".
             for (root, _, files) in walkdir(joinpath(tmp, "lib"))
                 for f in files
                     p = joinpath(root, f)
