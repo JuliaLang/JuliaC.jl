@@ -325,29 +325,40 @@
             @test isfile(joinpath(bindir, "libjulia.dll"))
 
             # Load the product in a fresh Julia process (which already has the runtime loaded) and inspect Libdl.dllist(), mirroring the Unix "Julia dlopen test" above.
+            # Flushed markers localize the hang (M2 dirs right after dlopen tells us whether
+            # SxS activated, BEFORE the first ccall that triggers the product's runtime init);
+            # the watchdog ensures CI can never again hit the 6h job limit.
             product_literal = repr(product)
             bindir_literal = repr(bindir)
             snippet = """
                 using Libdl
-                # Capture the runtime libraries already loaded by this host process.
-                before = filter(p -> occursin("libjulia", lowercase(basename(p))), Libdl.dllist())
+                errln(s) = (println(stderr, s); flush(stderr))
+                libdirs() = unique(map(p -> lowercase(abspath(dirname(p))),
+                                       filter(p -> occursin("libjulia", lowercase(basename(p))), Libdl.dllist())))
+                errln("M1_PRE_DLOPEN dirs=" * string(libdirs()))
                 h = Libdl.dlopen($product_literal, Libdl.RTLD_LOCAL)
-                try
-                    # Confirm the exported function works once loaded.
-                    r = ccall(Libdl.dlsym(h, :jc_add_one), Cint, (Cint,), 41)
-                    println("RESULT=", r)
-                    after = filter(p -> occursin("libjulia", lowercase(basename(p))), Libdl.dllist())
-                    # Distinct dirs holding a libjulia*.dll: host copy + bundled copy (>= 2).
-                    dirs = unique(map(p -> lowercase(abspath(dirname(p))), after))
-                    bundled = lowercase(abspath($bindir_literal))
-                    println("HOST_LIBJULIA_COUNT=", length(before))
-                    println("DISTINCT_DIRS=", length(dirs))
-                    println("HAS_BUNDLED=", bundled in dirs)
-                finally
-                    try Libdl.dlclose(h) catch end
-                end
+                errln("M2_POST_DLOPEN dirs=" * string(libdirs()))   # bundled dir present here => SxS activated
+                sym = Libdl.dlsym(h, :jc_add_one)
+                errln("M3_POST_DLSYM")
+                errln("M4_PRE_CCALL")
+                r = ccall(sym, Cint, (Cint,), 41)                   # first ccall triggers the product's runtime init
+                errln("M5_POST_CCALL r=" * string(r))
+                println("RESULT=", r)
+                d = libdirs()
+                println("DISTINCT_DIRS=", length(d))
+                println("HAS_BUNDLED=", lowercase(abspath($bindir_literal)) in d)
+                try Libdl.dlclose(h) catch end
                 """
-            out = read(`$(Base.julia_cmd()) --startup-file=no --history-file=no -e $snippet`, String)
+            logf = joinpath(outdir, "winload.log")
+            proc = run(pipeline(`$(Base.julia_cmd()) --startup-file=no --history-file=no -e $snippet`;
+                                stdout=logf, stderr=logf); wait=false)
+            @async begin
+                sleep(180)
+                Base.process_running(proc) && (kill(proc); @warn "Windows load test exceeded 180s; killed")
+            end
+            wait(proc)
+            out = isfile(logf) ? read(logf, String) : ""
+            @info "Windows privatized-load diagnostic:\n$out"
 
             # The exported symbol still resolves through the privatized runtime.
             @test occursin("RESULT=42", out)
