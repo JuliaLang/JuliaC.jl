@@ -37,6 +37,37 @@ function _start_spinner(message::String; io::IO=stderr)
     return finished, task
 end
 
+function _absolutize_paths!(x, base)
+    if x isa AbstractDict
+        p = get(x, "path", nothing)
+        if p isa AbstractString && !isabspath(p)
+            x["path"] = abspath(joinpath(base, p))
+        end
+        for v in values(x)
+            _absolutize_paths!(v, base)
+        end
+    elseif x isa AbstractVector
+        for v in values(x)
+            _absolutize_paths!(v, base)
+        end
+    end
+end
+
+# Replace `[sources]` with absolute paths, referenced to `basedir`
+function absolutize_paths!(project_dir, basedir)
+    for f in readdir(project_dir)
+        occursin(r"^(Julia)?(Project|Manifest).*\.toml$", f) || continue
+        file = joinpath(project_dir, f)
+        let data = TOML.parsefile(file)
+            _absolutize_paths!(data, basedir)
+            open(file, "w") do io
+                TOML.print(io, data)
+            end
+        end
+    end
+    return nothing
+end
+
 function compile_products(recipe::ImageRecipe)
     # Only strip IR / metadata if not `--trim=no`
     strip_args = String[]
@@ -103,6 +134,9 @@ function compile_products(recipe::ImageRecipe)
         end
     end
     project_arg = isdir(project_arg) ? tmp_project : joinpath(tmp_project, basename(project_arg))
+
+    # Update any `[sources]` to refer to the original `project_dir`
+    absolutize_paths!(tmp_project, project_dir)
 
     # Always clear JULIA_LOAD_PATH to prevent parent environment leakage
     # (e.g. when JuliaC is invoked as a Pkg app, the shim sets JULIA_LOAD_PATH

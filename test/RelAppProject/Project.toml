@@ -1,0 +1,10 @@
+name = "RelAppProject"
+uuid = "706ac13b-b18e-4f00-9ffc-1dbfdac0cb20"
+version = "0.1.0"
+authors = ["Cody Tapscott <topolarity@tapscott.me>"]
+
+[deps]
+RelDepProject = "a2b563b2-bc84-4a27-9386-51c3ceba0d07"
+
+[sources]
+RelDepProject = {path = "../RelDepProject"}

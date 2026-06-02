@@ -1,6 +1,7 @@
 module JuliaC
 
 using Pkg
+using TOML
 using PackageCompiler
 using LazyArtifacts
 using RelocatableFolders
