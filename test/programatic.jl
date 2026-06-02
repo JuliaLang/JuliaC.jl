@@ -577,3 +577,33 @@ end
     # Print tree for debugging/inspection
     print_tree_with_sizes(outdir)
 end
+
+@testset "Relative `[sources]` dep path (#153)" begin
+    # Projects with relative path `[sources]` need special handling
+    # by JuliaC's Project.toml logic
+    relapp_proj = abspath(joinpath(@__DIR__, "RelAppProject"))
+    outdir = mktempdir()
+    exeout = joinpath(outdir, "relapp")
+
+    img = JuliaC.ImageRecipe(
+        file = joinpath(relapp_proj, "src", "main.jl"),
+        output_type = "--output-exe",
+        project = relapp_proj,
+        trim_mode = "safe",
+        verbose = true,
+    )
+    JuliaC.compile_products(img)
+    link = JuliaC.LinkRecipe(image_recipe=img, outname=exeout, rpath=JuliaC.RPATH_BUNDLE)
+    JuliaC.link_products(link)
+    bun = JuliaC.BundleRecipe(link_recipe=link, output_dir=outdir)
+    JuliaC.bundle_products(bun)
+
+    output_exe = if Sys.iswindows()
+        joinpath(outdir, "bin", basename(exeout) * ".exe")
+    else
+        joinpath(outdir, "bin", basename(exeout))
+    end
+    @test isfile(output_exe)
+    output = read(`$output_exe`, String)
+    @test occursin("hello from a relative-path dependency", output)
+end
