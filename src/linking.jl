@@ -149,7 +149,8 @@ function link_products(recipe::LinkRecipe)
             cmd2 = `$cmd2 -Wl,-soname,$(lib_name)`
         end
         image_recipe.verbose && println("Running: $cmd2")
-        run(cmd2)
+        run_with_suppressed_output(cmd2; quiet=image_recipe.quiet) ||
+            error("linker invocation failed")
     catch e
         error("\nCompilation failed: ", e)
     end
