@@ -11,6 +11,15 @@ function bundle_products(recipe::BundleRecipe)
         return
     end
 
+    # PackageCompiler.bundle_cert / bundle_artifacts cp without force=true and
+    # would fail on a re-run. Remove just their targets so the existing files
+    # get overwritten; everything else PackageCompiler writes is already
+    # skip-existing or force-overwriting, so wiping more is unnecessary (and
+    # unsafe — output_dir may default to the user's cwd).
+    share_julia = joinpath(recipe.output_dir, "share", "julia")
+    rm(joinpath(share_julia, "cert.pem"); force=true)
+    rm(joinpath(share_julia, "artifacts"); force=true, recursive=true)
+
     # Ensure the bundle output directory exists
     mkpath(recipe.output_dir)
 
@@ -24,22 +33,14 @@ function bundle_products(recipe::BundleRecipe)
 
     # Re-home bundled libraries into the desired bundle layout
     libdir = recipe.libdir
-    # Move `<output_dir>/julia` -> `<output_dir>/<libdir>/julia`
+    # Move `<output_dir>/julia` -> `<output_dir>/<libdir>/julia`.
     src_julia_dir = joinpath(recipe.output_dir, "julia")
     if isdir(src_julia_dir)
         dest_root = joinpath(recipe.output_dir, libdir)
         mkpath(dest_root)
         dest_julia_dir = joinpath(dest_root, "julia")
         if abspath(src_julia_dir) != abspath(dest_julia_dir)
-            if isdir(dest_julia_dir)
-                # Track this directory for removal in the consolidation function
-                dirs_to_remove = [dest_julia_dir]
-            else
-                dirs_to_remove = String[]
-            end
             mv(src_julia_dir, dest_julia_dir; force=true)
-        else
-            dirs_to_remove = String[]
         end
         # On Windows, place required DLLs next to the executable (in bin/) for loader discovery
         if Sys.iswindows()
@@ -55,8 +56,6 @@ function bundle_products(recipe::BundleRecipe)
                 end
             end
         end
-    else
-        dirs_to_remove = String[]
     end
 
     # Determine where to place the built product within the bundle
@@ -82,11 +81,6 @@ function bundle_products(recipe::BundleRecipe)
     # On macOS, codesign the bundled binaries to avoid Gatekeeper kills when loading
     if Sys.isapple()
         _codesign_bundle!(recipe)
-    end
-
-    # Now perform all directory removals at once
-    for dir in dirs_to_remove
-        rm(dir; force=true, recursive=true)
     end
 end
 
