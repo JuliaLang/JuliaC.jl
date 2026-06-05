@@ -11,21 +11,14 @@ function bundle_products(recipe::BundleRecipe)
         return
     end
 
-    # Wipe top-level subdirs of a previous bundle so re-runs are idempotent
-    # (PackageCompiler's bundle_cert/bundle_artifacts cp without force). Only
-    # touch directories: top-level files are link products (the main artifact
-    # plus, on Windows, its sibling `.dll.a` import library) and must survive.
-    # Skip any subdir that contains the link output (programmatic API allows
-    # outname inside output_dir).
-    out_abs = abspath(recipe.output_dir)
-    outname_abs = abspath(recipe.link_recipe.outname)
-    if isdir(out_abs)
-        for entry in readdir(out_abs, join=true)
-            isdir(entry) || continue
-            startswith(relpath(outname_abs, abspath(entry)), "..") || continue
-            rm(entry; force=true, recursive=true)
-        end
-    end
+    # PackageCompiler.bundle_cert / bundle_artifacts cp without force=true and
+    # would fail on a re-run. Remove just their targets so the existing files
+    # get overwritten; everything else PackageCompiler writes is already
+    # skip-existing or force-overwriting, so wiping more is unnecessary (and
+    # unsafe — output_dir may default to the user's cwd).
+    share_julia = joinpath(recipe.output_dir, "share", "julia")
+    rm(joinpath(share_julia, "cert.pem"); force=true)
+    rm(joinpath(share_julia, "artifacts"); force=true, recursive=true)
 
     # Ensure the bundle output directory exists
     mkpath(recipe.output_dir)
