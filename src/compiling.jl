@@ -176,6 +176,8 @@ function compile_products(recipe::ImageRecipe)
     if !run_with_suppressed_output(inst_cmd; quiet=recipe.quiet)
         error("Error encountered during instantiate/precompile of app project.")
     end
+    # Record the instantiated project dir for future bundling steps, cleanup, etc.
+    recipe.instantiated_project = tmp_project
     recipe.verbose && println("Precompilation took $((time_ns() - precompile_time)/1e9) s")
     # Compile the Julia code
     if recipe.img_path == ""

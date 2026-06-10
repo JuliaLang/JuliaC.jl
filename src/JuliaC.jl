@@ -22,6 +22,7 @@ Base.@kwdef mutable struct ImageRecipe
     file::String = ""
     julia_args::Vector{String} = String[]
     project::String = ""
+    instantiated_project::String = ""
     img_path::String = ""
     # compile-time configuration
     verbose::Bool = false

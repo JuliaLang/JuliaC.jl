@@ -14,13 +14,17 @@ function bundle_products(recipe::BundleRecipe)
     # Ensure the bundle output directory exists
     mkpath(recipe.output_dir)
 
-    # Create julia subdirectory for bundled libraries under lib/ (or bin/ on Windows)
-    quiet = recipe.link_recipe.image_recipe.quiet
-    ctx2 = PackageCompiler.create_pkg_context(recipe.link_recipe.image_recipe.project)
+    # Create julia subdirectory for bundled libraries under lib/ (or bin/ on Windows).
+    image_recipe = recipe.link_recipe.image_recipe
+    quiet = image_recipe.quiet
+
+    # Bundle from the temporary project, where we compiled from
+    @assert !isempty(image_recipe.instantiated_project) "project was not copied / instantiated"
+    ctx2 = PackageCompiler.create_pkg_context(image_recipe.instantiated_project)
     stdlibs = unique(vcat(PackageCompiler.gather_stdlibs_project(ctx2),
                           intersect(PackageCompiler._STDLIBS, map(x->x.name, Base._sysimage_modules))))
-    libs_info = PackageCompiler.bundle_julia_libraries(recipe.output_dir, stdlibs)
-    artifacts_info = PackageCompiler.bundle_artifacts(ctx2, recipe.output_dir; include_lazy_artifacts=false) # Lazy artifacts
+    libs_info = PackageCompiler.bundle_julia_libraries(recipe.output_dir, stdlibs; quiet)
+    artifacts_info = PackageCompiler.bundle_artifacts(ctx2, recipe.output_dir; include_lazy_artifacts=false, quiet) # Lazy artifacts
     PackageCompiler.bundle_cert(recipe.output_dir) # SSL certificates
 
     # Re-home bundled libraries into the desired bundle layout
