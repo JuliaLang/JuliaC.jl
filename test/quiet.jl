@@ -37,6 +37,28 @@ end
         @test occursin("Fast compilation test!", read(`$actual_exe`, String))
     end
 
+    @testset "manifest-less project build is silent" begin
+        # TrimmabilityProject ships only a Project.toml (no Manifest.toml). Bundling
+        # must gather from the instantiated project copy (which has a resolved
+        # manifest), not the original — otherwise PackageCompiler's
+        # "without a preexisting manifest" @warn leaks to stderr in quiet mode.
+        outdir = mktempdir()
+        exename = "trim_quiet"
+        result = run_juliac_capture(String[
+            "--output-exe", exename,
+            "--trim=safe",
+            abspath(joinpath(@__DIR__, "TrimmabilityProject")),
+            "--bundle", outdir,
+            "--quiet",
+        ])
+        @test result.code == 0
+        @test isempty(result.out)
+        @test isempty(result.err)
+
+        actual_exe = Sys.iswindows() ? joinpath(outdir, "bin", exename * ".exe") : joinpath(outdir, "bin", exename)
+        @test isfile(actual_exe)
+    end
+
     @testset "build errors are still reported" begin
         outdir = mktempdir()
         # `untrimmable.jl` performs a dynamic dispatch the `--trim` verifier
