@@ -22,9 +22,11 @@ Base.@kwdef mutable struct ImageRecipe
     file::String = ""
     julia_args::Vector{String} = String[]
     project::String = ""
+    instantiated_project::String = ""
     img_path::String = ""
     # compile-time configuration
     verbose::Bool = false
+    quiet::Bool = false
     use_loaded_libs::Bool = false
     # C shim sources to compile and link into the final artifact
     c_sources::Vector{String} = String[]
@@ -100,6 +102,7 @@ function _print_usage(io::IO=stdout)
     println(io, "  --export-abi <file>         Emit type / function information for the ABI (in JSON format)")
     println(io, "  --experimental              Forwarded to Julia (needed for --trim)")
     println(io, "  --verbose                   Print commands and timings")
+    println(io, "  --quiet                     Suppress build output unless a step fails")
     println(io, "  --version                   Print juliac and julia version")
     println(io, "  -h, --help                  Show this help")
     println(io)
@@ -176,6 +179,8 @@ function _parse_cli_args(args::Vector{String})
             bundle_recipe.privatize = true
         elseif arg == "--verbose"
             image_recipe.verbose = true
+        elseif arg == "--quiet"
+            image_recipe.quiet = true
         else
             if arg[1] == '-' || image_recipe.file != ""
                 error("Unexpected argument `$arg`")
@@ -183,6 +188,10 @@ function _parse_cli_args(args::Vector{String})
             image_recipe.file = arg
         end
         i += 1
+    end
+
+    if image_recipe.quiet && image_recipe.verbose
+        error("--quiet and --verbose are mutually-exclusive")
     end
 
     link_recipe.outname == "" && error("No output file specified")

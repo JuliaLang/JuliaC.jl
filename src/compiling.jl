@@ -68,6 +68,20 @@ function absolutize_paths!(project_dir, basedir)
     return nothing
 end
 
+function run_with_suppressed_output(cmd::Base.AbstractCmd; quiet::Bool)
+    if quiet
+        buf = IOBuffer()
+        ok = success(pipeline(cmd; stdout=buf, stderr=buf))
+        if !ok
+            data = take!(buf)
+            isempty(data) || write(stderr, data)
+        end
+        return ok
+    else
+        return success(pipeline(cmd; stdout, stderr))
+    end
+end
+
 function compile_products(recipe::ImageRecipe)
     # Only strip IR / metadata if not `--trim=no`
     strip_args = String[]
@@ -159,9 +173,11 @@ function compile_products(recipe::ImageRecipe)
     inst_cmd = addenv(`$(Base.julia_cmd(cpu_target=precompile_cpu_target)) --project=$project_arg -e "using Pkg; Pkg.instantiate(); Pkg.precompile()"`, env_overrides...)
     recipe.verbose && println("Running: $inst_cmd")
     precompile_time = time_ns()
-    if !success(pipeline(inst_cmd; stdout, stderr))
+    if !run_with_suppressed_output(inst_cmd; quiet=recipe.quiet)
         error("Error encountered during instantiate/precompile of app project.")
     end
+    # Record the instantiated project dir for future bundling steps, cleanup, etc.
+    recipe.instantiated_project = tmp_project
     recipe.verbose && println("Precompilation took $((time_ns() - precompile_time)/1e9) s")
     # Compile the Julia code
     if recipe.img_path == ""
@@ -191,16 +207,22 @@ function compile_products(recipe::ImageRecipe)
     # Threading
     cmd = addenv(cmd, env_overrides...)
     recipe.verbose && println("Running: $cmd")
-    # Show a spinner while the compiler runs
-    spinner_done, spinner_task = _start_spinner("Compiling...")
+    # Show a spinner while the compiler runs (suppressed in quiet mode)
+    (spinner_done, spinner_task) = if recipe.quiet
+        (nothing, nothing)
+    else
+        _start_spinner("Compiling...")
+    end
     compile_time = time_ns()
     try
-        if !success(pipeline(cmd; stdout, stderr))
+        if !run_with_suppressed_output(cmd; quiet=recipe.quiet)
             error("Failed to compile $(recipe.file)")
         end
     finally
-        spinner_done[] = true
-        wait(spinner_task)
+        if spinner_task !== nothing
+            spinner_done[] = true
+            wait(spinner_task)
+        end
     end
     recipe.verbose && println("Compilation took $((time_ns() - compile_time)/1e9) s")
     # Print compiled image size
