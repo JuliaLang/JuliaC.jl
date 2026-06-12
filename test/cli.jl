@@ -113,6 +113,33 @@ end
     # `Ptr{CTree{Float64}}` should refer (recursively) back to the original type id
     Ptr_CTree_Float64 = abi["types"][CVector_CTree_Float64["fields"][2]["type_id"]]
     @test Ptr_CTree_Float64["pointee_type_id"] == CTree_Float64_id
+
+    # Homogeneous NTuple field should be emitted with `"kind": "array"` rather
+    # than expanded to per-element struct fields.
+    @test any(Bool[type["name"] == "CBuf4" for type in abi["types"]])
+    CBuf4 = abi["types"][findfirst(type["name"] == "CBuf4" for type in abi["types"])]
+    @test length(CBuf4["fields"]) == 1
+    tuple_type = abi["types"][CBuf4["fields"][1]["type_id"]]
+    @test tuple_type["kind"] == "array"
+    @test tuple_type["count"] == 4
+    @test abi["types"][tuple_type["element_type_id"]]["name"] == "Float64"
+    @test tuple_type["size"] == 32
+
+    # Parametric struct with a non-type (`Int`) parameter: the build itself
+    # is the test — before the guard in `recursively_add_types!` was added,
+    # iterating `T.parameters` of `CArrayN{Float64,3}` hit the `2`/`3` `Int`
+    # and crashed with a `MethodError`. Confirm the type made it out the
+    # other side and has the expected shape.
+    carray3d = abi["types"][findfirst(t["name"] == "CArrayN{Float64, 3}" for t in abi["types"])]
+    @test carray3d["kind"] == "struct"
+    @test length(carray3d["fields"]) == 2
+    dims_type = abi["types"][carray3d["fields"][1]["type_id"]]
+    @test dims_type["kind"] == "array"
+    @test dims_type["count"] == 3
+    @test abi["types"][dims_type["element_type_id"]]["name"] == "Int32"
+    data_type = abi["types"][carray3d["fields"][2]["type_id"]]
+    @test data_type["kind"] == "pointer"
+    @test abi["types"][data_type["pointee_type_id"]]["name"] == "Float64"
 end
 
 @testset "CLI library privatize end-to-end" begin
@@ -300,4 +327,71 @@ end
     JuliaC._main_cli(String["--version"]; io = io)
     @test String(take!(io)) ==
         "juliac version $(pkgversion(JuliaC)), julia version $(VERSION)\n"
+end
+
+# https://github.com/JuliaLang/JuliaC.jl/issues/106 + #124
+# Simulate the Pkg-app shim env by running `julia -m JuliaC` with
+# JULIA_LOAD_PATH pointing at a JuliaC-containing project, the way the shim does.
+@testset "Pkg app JULIA_LOAD_PATH isolation (#106)" begin
+    projectroot = mktempdir()
+    setup = """
+    using Pkg
+    Pkg.develop(path=$(repr(ROOT)))
+    Pkg.instantiate()
+    """
+    @test success(`$(Base.julia_cmd()) --startup-file=no --history-file=no --project=$(projectroot) -e $setup`)
+
+    outdir = mktempdir()
+    exename = "app_pkgapp"
+    cmd = addenv(
+        `$(Base.julia_cmd()) --startup-file=no --history-file=no --project=$(projectroot) -m JuliaC
+         --output-exe $exename $(TEST_PROJ) --bundle $outdir --verbose`,
+        "JULIA_LOAD_PATH" => projectroot * "/",
+    )
+    @test success(cmd)
+    actual_exe = Sys.iswindows() ? joinpath(outdir, "bin", exename * ".exe") : joinpath(outdir, "bin", exename)
+    @test isfile(actual_exe)
+    if isfile(actual_exe)
+        output = read(`$actual_exe`, String)
+        @test occursin("Fast compilation test!", output)
+    end
+end
+
+# End-to-end: install JuliaC as a Pkg app, invoke the shim, compile a project.
+# Unix-only: the Pkg app shim is a shell script on Unix, a .cmd on Windows.
+if Sys.isunix()
+@testset "Pkg app end-to-end (#106)" begin
+    mktempdir() do depot
+        outdir = mktempdir()
+        exename = "app_e2e"
+        sep = ":"
+        bindir = joinpath(depot, "bin")
+
+        depot_path = join([depot; Base.DEPOT_PATH], sep)
+        install_script = """
+        using Pkg
+        Pkg.Apps.develop(; path=$(repr(ROOT)))
+        """
+        install_cmd = addenv(
+            `$(Base.julia_cmd()) --startup-file=no --history-file=no -e $install_script`,
+            "JULIA_DEPOT_PATH" => depot_path,
+        )
+        @test success(install_cmd)
+
+        shim = joinpath(bindir, "juliac")
+        @test isfile(shim)
+
+        build_cmd = addenv(
+            `$shim --output-exe $exename $(TEST_PROJ) --bundle $outdir --verbose`,
+            "PATH" => bindir * sep * ENV["PATH"],
+        )
+        @test success(build_cmd)
+        actual_exe = joinpath(outdir, "bin", exename)
+        @test isfile(actual_exe)
+        if isfile(actual_exe)
+            output = read(`$actual_exe`, String)
+            @test occursin("Fast compilation test!", output)
+        end
+    end
+end
 end

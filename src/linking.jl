@@ -7,24 +7,20 @@ const RPATH_BUNDLE = "@bundle"
 function get_rpath(recipe::LinkRecipe)
     rpath = recipe.rpath
 
-    # Handle @julia magic string - absolute paths to Julia installation
+    if Sys.iswindows() && (rpath == RPATH_JULIA || rpath == RPATH_BUNDLE)
+        return "" # only (loader) default rpath is supported on Windows
+    end
+
     if rpath == RPATH_JULIA
-        if Sys.iswindows()
-            return ""
-        end
+        # Handle @julia magic string - absolute paths to Julia installation
         libdir = JuliaConfig.libDir()
         private_libdir = JuliaConfig.private_libDir()
         return "-Wl,-rpath,'$(libdir)' -Wl,-rpath,'$(private_libdir)'"
+    elseif rpath == RPATH_BUNDLE
+        # Handle @bundle magic string - standard bundle layout
+        rpath = joinpath("..", "lib")
     end
 
-    # Handle @bundle magic string - standard bundle layout
-    if rpath == RPATH_BUNDLE
-        if Sys.iswindows()
-            rpath = ""
-        else
-            rpath = joinpath("..", "lib")
-        end
-    end
     if Sys.isapple()
         base_token = "-Wl,-rpath,'@loader_path/"
     elseif Sys.islinux()
@@ -33,6 +29,7 @@ function get_rpath(recipe::LinkRecipe)
         @warn "get_rpath not implemented for this platform"
         return ""
     end
+
     # Emit rpaths for both base path and julia subdirectory
     priv_path = joinpath(rpath, "julia")
     base_path = rpath
@@ -136,7 +133,7 @@ function link_products(recipe::LinkRecipe)
             cmd2 = `$cmd2 -shared`
         end
         # Link in the whole archive and user-provided objects, then undo WHOLE_ARCHIVE
-        cmd2 = `$cmd2 -Wl,$(Base.Linking.WHOLE_ARCHIVE) $(image_recipe.img_path) $(image_recipe.extra_objects...) -Wl,$(Base.Linking.NO_WHOLE_ARCHIVE) $(julia_libs)`
+        cmd2 = `$cmd2 -Wl,$(Base.Linking.WHOLE_ARCHIVE) $(image_recipe.img_path) $(image_recipe.extra_objects) -Wl,$(Base.Linking.NO_WHOLE_ARCHIVE) $(julia_libs)`
         # Platform-specific linker flags
         lib_name = basename(recipe.outname)
         if Sys.iswindows()
@@ -149,7 +146,8 @@ function link_products(recipe::LinkRecipe)
             cmd2 = `$cmd2 -Wl,-soname,$(lib_name)`
         end
         image_recipe.verbose && println("Running: $cmd2")
-        run(cmd2)
+        run_with_suppressed_output(cmd2; quiet=image_recipe.quiet) ||
+            error("linker invocation failed")
     catch e
         error("\nCompilation failed: ", e)
     end

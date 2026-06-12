@@ -115,6 +115,33 @@
         end
     end
 
+    # https://github.com/JuliaLang/JuliaC.jl/issues/135
+    @testset "Multiple extra_objects link correctly" begin
+        outdir = mktempdir()
+        libname = "libmultiextraobjs"
+        libout = joinpath(outdir, libname)
+        c_sources = [
+            abspath(joinpath(@__DIR__, "c", "cshim_extra1.c")),
+            abspath(joinpath(@__DIR__, "c", "cshim_extra2.c")),
+        ]
+        img = JuliaC.ImageRecipe(
+            file = TEST_LIB_SRC,
+            output_type = "--output-lib",
+            project = TEST_LIB_PROJ,
+            add_ccallables = true,
+            trim_mode = "safe",
+            c_sources = c_sources,
+            verbose = true,
+        )
+        JuliaC.compile_products(img)
+        @test length(img.extra_objects) >= 2
+        link = JuliaC.LinkRecipe(image_recipe=img, outname=libout, rpath=JuliaC.RPATH_BUNDLE)
+        JuliaC.link_products(link)
+
+        dlext = Base.BinaryPlatforms.platform_dlext()
+        @test isfile(libout * "." * dlext)
+    end
+
     # https://github.com/JuliaLang/JuliaC.jl/pull/74
     @testset "Library has SONAME (Linux)" begin
         if Sys.islinux()
@@ -469,6 +496,56 @@ end
     @test occursin("nthreadpools=1", out)
 end
 
+# https://github.com/JuliaLang/JuliaC.jl/issues/124
+const DEP_PROJ = abspath(joinpath(@__DIR__, "DepProject"))
+
+@testset "Project with dependencies (no trim) (#124)" begin
+    outdir = mktempdir()
+    exeout = joinpath(outdir, "depproject")
+
+    img = JuliaC.ImageRecipe(
+        file = DEP_PROJ,
+        output_type = "--output-exe",
+        verbose = true,
+    )
+    JuliaC.compile_products(img)
+    link = JuliaC.LinkRecipe(image_recipe=img, outname=exeout, rpath=JuliaC.RPATH_BUNDLE)
+    JuliaC.link_products(link)
+    bun = JuliaC.BundleRecipe(link_recipe=link, output_dir=outdir)
+    JuliaC.bundle_products(bun)
+
+    actual_exe = Sys.iswindows() ? joinpath(outdir, "bin", basename(exeout) * ".exe") : joinpath(outdir, "bin", basename(exeout))
+    @test isfile(actual_exe)
+    if isfile(actual_exe)
+        output = read(`$actual_exe`, String)
+        @test occursin("sha256:", output)
+    end
+end
+
+@testset "Project with dependencies (trim) (#124)" begin
+    outdir = mktempdir()
+    exeout = joinpath(outdir, "depproject_trim")
+
+    img = JuliaC.ImageRecipe(
+        file = DEP_PROJ,
+        output_type = "--output-exe",
+        trim_mode = "safe",
+        verbose = true,
+    )
+    JuliaC.compile_products(img)
+    link = JuliaC.LinkRecipe(image_recipe=img, outname=exeout, rpath=JuliaC.RPATH_BUNDLE)
+    JuliaC.link_products(link)
+    bun = JuliaC.BundleRecipe(link_recipe=link, output_dir=outdir)
+    JuliaC.bundle_products(bun)
+
+    actual_exe = Sys.iswindows() ? joinpath(outdir, "bin", basename(exeout) * ".exe") : joinpath(outdir, "bin", basename(exeout))
+    @test isfile(actual_exe)
+    if isfile(actual_exe)
+        output = read(`$actual_exe`, String)
+        @test occursin("sha256:", output)
+    end
+end
+
 @testset "Project as File" begin
     outdir = mktempdir()
     exeout = joinpath(outdir, "prog_exe_projfile")
@@ -499,4 +576,34 @@ end
     @test occursin("Fast compilation test!", output)
     # Print tree for debugging/inspection
     print_tree_with_sizes(outdir)
+end
+
+@testset "Relative `[sources]` dep path (#153)" begin
+    # Projects with relative path `[sources]` need special handling
+    # by JuliaC's Project.toml logic
+    relapp_proj = abspath(joinpath(@__DIR__, "RelAppProject"))
+    outdir = mktempdir()
+    exeout = joinpath(outdir, "relapp")
+
+    img = JuliaC.ImageRecipe(
+        file = joinpath(relapp_proj, "src", "main.jl"),
+        output_type = "--output-exe",
+        project = relapp_proj,
+        trim_mode = "safe",
+        verbose = true,
+    )
+    JuliaC.compile_products(img)
+    link = JuliaC.LinkRecipe(image_recipe=img, outname=exeout, rpath=JuliaC.RPATH_BUNDLE)
+    JuliaC.link_products(link)
+    bun = JuliaC.BundleRecipe(link_recipe=link, output_dir=outdir)
+    JuliaC.bundle_products(bun)
+
+    output_exe = if Sys.iswindows()
+        joinpath(outdir, "bin", basename(exeout) * ".exe")
+    else
+        joinpath(outdir, "bin", basename(exeout))
+    end
+    @test isfile(output_exe)
+    output = read(`$output_exe`, String)
+    @test occursin("hello from a relative-path dependency", output)
 end

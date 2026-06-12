@@ -54,6 +54,7 @@ plat_install_name_change!(::MacOSPlatform, binpath::String, old::String, new::St
 plat_get_deps(::MacOSPlatform, bin::String) = get_dependencies_macos(bin)
 
 function _codesign_bundle!(recipe::BundleRecipe)
+    quiet = recipe.link_recipe.image_recipe.quiet
     cs = Sys.which("codesign")
     xattr = Sys.which("xattr")
     cs === nothing && return
@@ -74,7 +75,8 @@ function _codesign_bundle!(recipe::BundleRecipe)
     # Clear quarantine attributes first
     if xattr !== nothing
         for p in to_sign
-            run(`$xattr -dr com.apple.quarantine $p`)
+            run_with_suppressed_output(`$xattr -dr com.apple.quarantine $p`; quiet) ||
+                error("Failed to clear quarantine attributes on $p")
         end
     end
     # Narrow signing set: primary artifact and salted libjulia* copies only
@@ -92,6 +94,7 @@ function _codesign_bundle!(recipe::BundleRecipe)
         if islink(p)
             continue
         end
-        run(`$cs -f -s - --deep --timestamp=none $p`)
+        run_with_suppressed_output(`$cs -f -s - --deep --timestamp=none $p`; quiet) ||
+            error("codesign failed for $p")
     end
 end

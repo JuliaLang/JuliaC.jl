@@ -12,12 +12,13 @@ function recursively_add_types!(types::Base.IdSet{DataType}, @nospecialize(T::Da
         T = T.parameters[1] # unwrap Ptr{...}
         T in types && return types
     end
-    if T.name.module === Core && T ∉ C_friendly_types
+    if T.name.module === Core && T ∉ C_friendly_types && !(T <: Tuple)
         error("invalid type for juliac: ", T) # exclude internals (they may change)
     end
     push!(types, T)
     for list in (T.parameters, fieldtypes(T))
         for S in list
+            S isa DataType || continue   # skip non-type parameters (Int, TypeVar, Vararg, …)
             recursively_add_types!(types, S)
         end
     end
@@ -126,11 +127,41 @@ function emit_primitive_type!(ctx::TypeEmitter, @nospecialize(dt::DataType); ind
     end
 end
 
+function is_homogeneous_tuple(@nospecialize(dt::DataType))
+    dt <: Tuple || return false
+    n = fieldcount(dt)
+    n > 0 || return false
+    fts = fieldtypes(dt)
+    T = fts[1]
+    for i = 2:n
+        fts[i] === T || return false
+    end
+    return true
+end
+
+function emit_array_info!(ctx::TypeEmitter, @nospecialize(dt::DataType); indent::Int = 0)
+    type_id = ctx.type_ids[dt]
+    element_type_id = ctx.type_ids[fieldtype(dt, 1)]
+    let indented_println(args...) = println(ctx.io, " " ^ indent, args...)
+        indented_println("{")
+        indented_println("  \"id\": ", type_id, ",")
+        indented_println("  \"kind\": \"array\",")
+        indented_println("  \"name\": ", type_name_json(dt), ",")
+        indented_println("  \"element_type_id\": ", element_type_id, ",")
+        indented_println("  \"count\": ", fieldcount(dt), ",")
+        indented_println("  \"size\": ", Core.sizeof(dt), ",")
+        indented_println("  \"alignment\": ", Base.datatype_alignment(dt))
+        print(ctx.io, " " ^ indent, "}")
+    end
+end
+
 function emit_type_info!(ctx::TypeEmitter, @nospecialize(dt::DataType); indent::Int = 0)
     if dt.name === Ptr.body.name
         emit_pointer_info!(ctx, dt; indent)
     elseif Base.isprimitivetype(dt)
         emit_primitive_type!(ctx, dt; indent)
+    elseif is_homogeneous_tuple(dt)
+        emit_array_info!(ctx, dt; indent)
     else
         emit_struct_info!(ctx, dt; indent)
     end

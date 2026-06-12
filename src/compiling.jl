@@ -37,6 +37,51 @@ function _start_spinner(message::String; io::IO=stderr)
     return finished, task
 end
 
+function _absolutize_paths!(x, base)
+    if x isa AbstractDict
+        p = get(x, "path", nothing)
+        if p isa AbstractString && !isabspath(p)
+            x["path"] = abspath(joinpath(base, p))
+        end
+        for v in values(x)
+            _absolutize_paths!(v, base)
+        end
+    elseif x isa AbstractVector
+        for v in values(x)
+            _absolutize_paths!(v, base)
+        end
+    end
+end
+
+# Replace `[sources]` with absolute paths, referenced to `basedir`
+function absolutize_paths!(project_dir, basedir)
+    for f in readdir(project_dir)
+        occursin(r"^(Julia)?(Project|Manifest).*\.toml$", f) || continue
+        file = joinpath(project_dir, f)
+        let data = TOML.parsefile(file)
+            _absolutize_paths!(data, basedir)
+            open(file, "w") do io
+                TOML.print(io, data)
+            end
+        end
+    end
+    return nothing
+end
+
+function run_with_suppressed_output(cmd::Base.AbstractCmd; quiet::Bool)
+    if quiet
+        buf = IOBuffer()
+        ok = success(pipeline(cmd; stdout=buf, stderr=buf))
+        if !ok
+            data = take!(buf)
+            isempty(data) || write(stderr, data)
+        end
+        return ok
+    else
+        return success(pipeline(cmd; stdout, stderr))
+    end
+end
+
 function compile_products(recipe::ImageRecipe)
     # Only strip IR / metadata if not `--trim=no`
     strip_args = String[]
@@ -104,32 +149,35 @@ function compile_products(recipe::ImageRecipe)
     end
     project_arg = isdir(project_arg) ? tmp_project : joinpath(tmp_project, basename(project_arg))
 
-    env_overrides = Dict{String,Any}()
-    tmp_prefs_env = nothing
-    if is_trim_enabled(recipe)
-        load_path_sep = Sys.iswindows() ? ";" : ":"
-        # Create a temporary environment with a LocalPreferences.toml that will be added to JULIA_LOAD_PATH.
-        tmp_prefs_env = mktempdir()
-        open(joinpath(tmp_prefs_env, "Project.toml"), "w") do io
-            println(io, "[extras]")
-            println(io, "HostCPUFeatures = \"3e5b6fbb-0976-4d2c-9146-d79de83f2fb0\"")
-        end
-        # Write LocalPreferences.toml with the trim preferences
-        open(joinpath(tmp_prefs_env, "LocalPreferences.toml"), "w") do io
-            println(io, "[HostCPUFeatures]")
-            println(io, "freeze_cpu_target = true")
-        end
-        # Append the temp env to JULIA_LOAD_PATH
+    # Update any `[sources]` to refer to the original `project_dir`
+    absolutize_paths!(tmp_project, project_dir)
 
-        env_overrides["JULIA_LOAD_PATH"] = load_path_sep * tmp_prefs_env
+    # Always clear JULIA_LOAD_PATH to prevent parent environment leakage
+    # (e.g. when JuliaC is invoked as a Pkg app, the shim sets JULIA_LOAD_PATH
+    # to JuliaC's own project, which would break user project compilation — #106/#124).
+    env_overrides = Dict{String,Any}("JULIA_LOAD_PATH" => nothing)
+
+    if is_trim_enabled(recipe)
+        # Inject the HostCPUFeatures `freeze_cpu_target` preference directly into the
+        # temp project copy so it's visible without JULIA_LOAD_PATH manipulation.
+        tmp_project_dir = isdir(project_arg) ? project_arg : dirname(project_arg)
+        Preferences.set_preferences!(
+            (Base.UUID("3e5b6fbb-0976-4d2c-9146-d79de83f2fb0"), "HostCPUFeatures"),
+            "freeze_cpu_target" => true;
+            project_toml = joinpath(tmp_project_dir, "Project.toml"),
+            export_prefs = true,
+            force = true,
+        )
     end
 
     inst_cmd = addenv(`$(Base.julia_cmd(cpu_target=precompile_cpu_target)) --project=$project_arg -e "using Pkg; Pkg.instantiate(); Pkg.precompile()"`, env_overrides...)
     recipe.verbose && println("Running: $inst_cmd")
     precompile_time = time_ns()
-    if !success(pipeline(inst_cmd; stdout, stderr))
+    if !run_with_suppressed_output(inst_cmd; quiet=recipe.quiet)
         error("Error encountered during instantiate/precompile of app project.")
     end
+    # Record the instantiated project dir for future bundling steps, cleanup, etc.
+    recipe.instantiated_project = tmp_project
     recipe.verbose && println("Precompilation took $((time_ns() - precompile_time)/1e9) s")
     # Compile the Julia code
     if recipe.img_path == ""
@@ -159,16 +207,22 @@ function compile_products(recipe::ImageRecipe)
     # Threading
     cmd = addenv(cmd, env_overrides...)
     recipe.verbose && println("Running: $cmd")
-    # Show a spinner while the compiler runs
-    spinner_done, spinner_task = _start_spinner("Compiling...")
+    # Show a spinner while the compiler runs (suppressed in quiet mode)
+    (spinner_done, spinner_task) = if recipe.quiet
+        (nothing, nothing)
+    else
+        _start_spinner("Compiling...")
+    end
     compile_time = time_ns()
     try
-        if !success(pipeline(cmd; stdout, stderr))
+        if !run_with_suppressed_output(cmd; quiet=recipe.quiet)
             error("Failed to compile $(recipe.file)")
         end
     finally
-        spinner_done[] = true
-        wait(spinner_task)
+        if spinner_task !== nothing
+            spinner_done[] = true
+            wait(spinner_task)
+        end
     end
     recipe.verbose && println("Compilation took $((time_ns() - compile_time)/1e9) s")
     # Print compiled image size
