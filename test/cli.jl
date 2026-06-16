@@ -332,6 +332,29 @@ end
     end
 end
 
+@testset "Package dir basename differs from package name" begin
+    # Regression: the buildscript must resolve the package name from the project
+    # file's `name`, not the directory basename. They differ whenever a project is
+    # built from a copy in a differently-named directory (e.g. a temp dir), which
+    # previously failed with `Package <dirname> not found in current path`.
+    projdir = joinpath(mktempdir(), "mismatched_dir_name")
+    cp(TEST_PROJ, projdir)
+    outdir = mktempdir()
+    exename = "renamed_app"
+    cliargs = String[
+        "--output-exe", exename,
+        "--trim=safe",
+        projdir,
+        "--bundle", outdir,
+        "--verbose",
+    ]
+    run_juliac_cli(cliargs)
+    actual_exe = Sys.iswindows() ? joinpath(outdir, "bin", exename * ".exe") : joinpath(outdir, "bin", exename)
+    @test isfile(actual_exe)
+    output = read(`$actual_exe`, String)
+    @test occursin("Fast compilation test!", output)
+end
+
 # End-to-end: install JuliaC as a Pkg app, invoke the shim, compile a project.
 # Unix-only: the Pkg app shim is a shell script on Unix, a .cmd on Windows.
 if Sys.isunix()
