@@ -77,14 +77,25 @@ function _main(argc::Cint, argv::Ptr{Ptr{Cchar}})::Cint
     exit(Main.main(args))
 end
 
+# Resolve the package name from a project file's `name` entry
+function get_pkgname(source_path)
+    pkgname = nothing
+    for project_name in Base.project_names
+        path = joinpath(source_path, project_name)
+        if isfile(path)
+            name = get(Base.parsed_toml(path), "name", nothing)
+            if name !== nothing
+                return Symbol(name::String)
+            end
+        end
+    end
+    return nothing
+end
+
 let usermod
     if isdir(source_path)
-        patharg = source_path
-        if endswith(patharg, "/")
-            patharg = chop(patharg)
-        end
-        dname = splitdir(patharg)[2]
-        pkgname = Symbol(splitext(dname)[1])
+        pkgname = get_pkgname(source_path)
+        pkgname === nothing && error("Could not determine a package name: no `name` entry in a Project.toml under \"$source_path\"")
         Base.eval(Main, :(using $pkgname))
         Core.@latestworld
         usermod = getglobal(Main, pkgname)
