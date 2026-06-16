@@ -355,6 +355,26 @@ end
     @test occursin("Fast compilation test!", output)
 end
 
+# Copy a package source tree to a fresh, writable directory, skipping VCS/build
+# cruft and any stale Manifest. Installed packages are read-only and `cp`
+# preserves permissions, so we re-grant write to allow instantiation.
+function _writable_pkg_copy(src::AbstractString)
+    dst = joinpath(mktempdir(), basename(rstrip(src, '/')))
+    mkpath(dst)
+    for name in readdir(src)
+        name in (".git", "build") && continue
+        occursin(r"^(Julia)?Manifest.*\.toml$", name) && continue
+        cp(joinpath(src, name), joinpath(dst, name); force=true)
+    end
+    for (root, dirs, files) in walkdir(dst)
+        for n in Iterators.flatten((dirs, files))
+            p = joinpath(root, n)
+            chmod(p, filemode(p) | 0o200)
+        end
+    end
+    return dst
+end
+
 # End-to-end: install JuliaC as a Pkg app, invoke the shim, compile a project.
 # Unix-only: the Pkg app shim is a shell script on Unix, a .cmd on Windows.
 if Sys.isunix()
@@ -365,10 +385,19 @@ if Sys.isunix()
         sep = ":"
         bindir = joinpath(depot, "bin")
 
+        # `Pkg.Apps.develop` points the generated shim's `JULIA_LOAD_PATH` at the
+        # package source dir, so that dir must carry a resolved `Manifest.toml`
+        # for `julia -m JuliaC` to load JuliaC's dependencies due to:
+        #   https://github.com/JuliaLang/Pkg.jl/issues/4697
+        #
+        # FIXME: Delete this workaround once that bug is fixed.
+        pkgsrc = _writable_pkg_copy(ROOT)
         depot_path = join([depot; Base.DEPOT_PATH], sep)
         install_script = """
         using Pkg
-        Pkg.Apps.develop(; path=$(repr(ROOT)))
+        Pkg.activate($(repr(pkgsrc)))
+        Pkg.instantiate()
+        Pkg.Apps.develop(; path=$(repr(pkgsrc)))
         """
         install_cmd = addenv(
             `$(Base.julia_cmd()) --startup-file=no --history-file=no -e $install_script`,
