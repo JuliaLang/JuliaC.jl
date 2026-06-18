@@ -23,7 +23,7 @@ function get_rpath(recipe::LinkRecipe)
 
     if Sys.isapple()
         base_token = "-Wl,-rpath,'@loader_path/"
-    elseif Sys.islinux()
+    elseif Sys.islinux() || Sys.isfreebsd()
         base_token = "-Wl,-rpath,'\$ORIGIN/"
     else
         @warn "get_rpath not implemented for this platform"
@@ -142,7 +142,7 @@ function link_products(recipe::LinkRecipe)
             cmd2 = `$cmd2 -Wl,--out-implib=$(import_lib_path)`
         elseif Sys.isapple()
             cmd2 = `$cmd2 -Wl,-install_name,@rpath/$(lib_name)`
-        elseif Sys.islinux()
+        elseif Sys.islinux() || Sys.isfreebsd()
             cmd2 = `$cmd2 -Wl,-soname,$(lib_name)`
         end
         image_recipe.verbose && println("Running: $cmd2")

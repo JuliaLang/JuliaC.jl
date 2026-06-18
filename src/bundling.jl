@@ -122,7 +122,7 @@ end
 function privatize_libjulia!(recipe::BundleRecipe)
     if Sys.isapple()
         privatize_libjulia_macos!(recipe)
-    elseif Sys.islinux()
+    elseif Sys.islinux() || Sys.isfreebsd()
         privatize_libjulia_linux!(recipe)
     else
         @warn "Privatization not implemented for this OS"
