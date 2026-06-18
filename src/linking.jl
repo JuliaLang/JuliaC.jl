@@ -134,6 +134,12 @@ function link_products(recipe::LinkRecipe)
         end
         # Link in the whole archive and user-provided objects, then undo WHOLE_ARCHIVE
         cmd2 = `$cmd2 -Wl,$(Base.Linking.WHOLE_ARCHIVE) $(image_recipe.img_path) $(image_recipe.extra_objects) -Wl,$(Base.Linking.NO_WHOLE_ARCHIVE) $(julia_libs)`
+        if Sys.ARCH === :i686
+            # On 32-bit x86, Julia's 64-bit atomics require libatomic
+            cmd2 = `$cmd2 -latomic`
+            # On 32-bit x86, float math (e.g. floorf) can become a libcall to libm
+            cmd2 = `$cmd2 -lm`
+        end
         # Platform-specific linker flags
         lib_name = basename(recipe.outname)
         if Sys.iswindows()

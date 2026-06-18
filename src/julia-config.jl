@@ -45,9 +45,20 @@ function includeDir()
     return abspath(Sys.BINDIR, Base.INCLUDEDIR, "julia")
 end
 
+function march_flags()
+    if Sys.ARCH === :i686
+        return "-m32 -march=pentium4"
+    end
+    return ""
+end
+
 function ldflags(; framework::Bool=false)
     framework && return "-F$(shell_escape(frameworkDir()))"
     fl = "-L$(shell_escape(libDir()))"
+    march = march_flags()
+    if !isempty(march)
+        fl = march * " " * fl
+    end
     if Sys.iswindows()
         fl = fl * " -Wl,--stack,8388608"
     elseif !Sys.isapple()
@@ -89,6 +100,13 @@ end
 function cflags(; framework::Bool=false)
     flags = IOBuffer()
     print(flags, "-std=gnu11")
+    march = march_flags()
+    if !isempty(march)
+        print(flags, " ", march)
+    end
+    if Sys.ARCH === :i686
+        print(flags, " -Wno-psabi")
+    end
     if framework
         include = shell_escape(frameworkDir())
         print(flags, " -F", include)

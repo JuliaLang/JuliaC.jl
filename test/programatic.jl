@@ -34,9 +34,9 @@
             cc = something(Sys.which("cc"), Sys.which("clang"))
             cc === nothing && error("C compiler not found")
             if Sys.islinux()
-                run(`$cc -o $exe $csrc -ldl`)
+                run(`$cc $(cflags()) -o $exe $csrc -ldl`)
             else
-                run(`$cc -o $exe $csrc`)
+                run(`$cc $(cflags()) -o $exe $csrc`)
             end
             run(`$exe $libpath`)
         end
@@ -87,9 +87,9 @@
             cc = something(Sys.which("cc"), Sys.which("clang"))
             cc === nothing && error("C compiler not found")
             if Sys.islinux()
-                run(`$cc -o $exe $csrc -ldl`)
+                run(`$cc $(cflags()) -o $exe $csrc -ldl`)
             else
-                run(`$cc -o $exe $csrc`)
+                run(`$cc $(cflags()) -o $exe $csrc`)
             end
             run(`$exe $libpath`)
         end
@@ -483,9 +483,9 @@ end
     exe = joinpath(bindir, Sys.iswindows() ? "ctest_jloptions.exe" : "ctest_jloptions")
     cc = JuliaC.get_compiler_cmd()
     if Sys.islinux()
-        run(`$cc -o $exe $csrc -ldl`)
+        run(`$cc $(cflags()) -o $exe $csrc -ldl`)
     else
-        run(`$cc -o $exe $csrc`)
+        run(`$cc $(cflags()) -o $exe $csrc`)
     end
 
     out = read(`$exe $libpath`, String)

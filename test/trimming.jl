@@ -99,9 +99,9 @@ end
     cc = JuliaC.get_compiler_cmd()
 
     if Sys.islinux()
-        run(`$cc -o $exe $csrc -ldl`)
+        run(`$cc $(cflags()) -o $exe $csrc -ldl`)
     else
-        run(`$cc -o $exe $csrc`)
+        run(`$cc $(cflags()) -o $exe $csrc`)
     end
 
     # Run the C application
