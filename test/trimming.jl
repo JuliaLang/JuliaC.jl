@@ -13,7 +13,7 @@ const TRIM_PROJ = abspath(joinpath(@__DIR__, "TrimmabilityProject"))
         output_type = "--output-exe",
         project = TEST_PROJ,
         trim_mode = "safe",
-        verbose = true,
+        quiet = true,
     )
     JuliaC.compile_products(img)
     link = JuliaC.LinkRecipe(image_recipe=img, outname=exeout)
@@ -26,8 +26,6 @@ const TRIM_PROJ = abspath(joinpath(@__DIR__, "TrimmabilityProject"))
 
     # Test that the executable size stays reasonable (< 2.5MB for the executable itself)
     @test filesize(actual_exe) < 2_500_000
-
-    print_tree_with_sizes(outdir)
 end
 
 @testset "Trimming: trimmability.jl (various constructs)" begin
@@ -39,7 +37,7 @@ end
         file = TRIM_PROJ,
         output_type = "--output-exe",
         trim_mode = "safe",
-        verbose = true,
+        quiet = true,
     )
     JuliaC.compile_products(img)
     link = JuliaC.LinkRecipe(image_recipe=img, outname=exeout)
@@ -66,8 +64,6 @@ end
     @test lines[4] == "arg2"
     @test parse(Float64, lines[5]) ≈ (4.0 + pi)
     @test parse(Float64, lines[6]) isa Float64
-
-    print_tree_with_sizes(outdir)
 end
 
 @testset "Trimming: libsimple.jl C application test" begin
@@ -81,7 +77,7 @@ end
         project = TEST_LIB_PROJ,
         add_ccallables = true,
         trim_mode = "safe",
-        verbose = true,
+        quiet = true,
     )
     JuliaC.compile_products(img)
     link = JuliaC.LinkRecipe(image_recipe=img, outname=libout)

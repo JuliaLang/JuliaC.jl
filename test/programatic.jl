@@ -6,7 +6,7 @@
         project = TEST_LIB_PROJ,
         add_ccallables = true,
         trim_mode = "safe",
-        verbose = true,
+        quiet = true,
     )
     JuliaC.compile_products(img_lib)
     @test isfile(img_lib.img_path)
@@ -131,7 +131,7 @@
             add_ccallables = true,
             trim_mode = "safe",
             c_sources = c_sources,
-            verbose = true,
+            quiet = true,
         )
         JuliaC.compile_products(img)
         @test length(img.extra_objects) >= 2
@@ -272,7 +272,7 @@ end
         output_type = "--output-exe",
         project = TEST_PROJ,
         trim_mode = "safe",
-        verbose = true,
+        quiet = true,
     )
     JuliaC.compile_products(img)
     link = JuliaC.LinkRecipe(image_recipe=img, outname=exeout, rpath=JuliaC.RPATH_BUNDLE)
@@ -283,8 +283,6 @@ end
     @test isfile(actual_exe)
     output = read(`$actual_exe`, String)
     @test occursin("Fast compilation test!", output)
-    # Print tree for debugging/inspection
-    print_tree_with_sizes(outdir)
 end
 
 @testset "Suffix handling" begin
@@ -297,7 +295,7 @@ end
         project = TEST_LIB_PROJ,
         add_ccallables = true,
         trim_mode = "safe",
-        verbose = false,
+        quiet = true,
     )
     JuliaC.compile_products(img)
 
@@ -352,7 +350,7 @@ end
         output_type = "--output-o",
         project = TEST_LIB_PROJ,
         trim_mode = "safe",
-        verbose = false,
+        quiet = true,
     )
     JuliaC.compile_products(img)
     @test isfile(img.img_path)
@@ -372,7 +370,7 @@ end
         output_type = "--output-lib",
         project = TEST_LIB_PROJ,
         trim_mode = "safe",
-        verbose = false,
+        quiet = true,
     )
     @test isempty(img.jl_options)
     JuliaC.compile_products(img)
@@ -385,7 +383,7 @@ end
         output_type = "--output-lib",
         project = TEST_LIB_PROJ,
         trim_mode = "safe",
-        verbose = false,
+        quiet = true,
         jl_options = Dict("handle-signals" => "yes"),
     )
     JuliaC.compile_products(img2)
@@ -398,7 +396,7 @@ end
         output_type = "--output-exe",
         project = TEST_PROJ,
         trim_mode = "safe",
-        verbose = false,
+        quiet = true,
     )
     JuliaC.compile_products(img3)
     @test isempty(img3.jl_options)
@@ -411,6 +409,7 @@ end
         output_type = "--output-lib",
         project = TEST_LIB_PROJ,
         trim_mode = "safe",
+        quiet = true,
         jl_options = Dict("bogus_field" => "42"),
     )
     @test_throws ErrorException JuliaC.compile_products(img)
@@ -433,7 +432,7 @@ end
         output_type = "--output-exe",
         project = TEST_PROJ,
         trim_mode = "safe",
-        verbose = true,
+        quiet = true,
         jl_options = Dict(
             "handle-signals" => "no",
             "threads" => "1",
@@ -464,7 +463,7 @@ end
         project = TEST_LIB_PROJ,
         add_ccallables = true,
         trim_mode = "safe",
-        verbose = true,
+        quiet = true,
     )
     JuliaC.compile_products(img)
     link = JuliaC.LinkRecipe(image_recipe=img, outname=libout, rpath=JuliaC.RPATH_BUNDLE)
@@ -506,7 +505,7 @@ const DEP_PROJ = abspath(joinpath(@__DIR__, "DepProject"))
     img = JuliaC.ImageRecipe(
         file = DEP_PROJ,
         output_type = "--output-exe",
-        verbose = true,
+        quiet = true,
     )
     JuliaC.compile_products(img)
     link = JuliaC.LinkRecipe(image_recipe=img, outname=exeout, rpath=JuliaC.RPATH_BUNDLE)
@@ -530,7 +529,7 @@ end
         file = DEP_PROJ,
         output_type = "--output-exe",
         trim_mode = "safe",
-        verbose = true,
+        quiet = true,
     )
     JuliaC.compile_products(img)
     link = JuliaC.LinkRecipe(image_recipe=img, outname=exeout, rpath=JuliaC.RPATH_BUNDLE)
@@ -556,14 +555,14 @@ end
         output_type = "--output-exe",
         project = TEST_PROJ,  # Invalid, should be a directory
         trim_mode = "safe",
-        verbose = true,
+        quiet = true,
     )
     @test_throws ErrorException JuliaC.compile_products(img_bad)
     img = JuliaC.ImageRecipe(
         file = TEST_PROJ,
         output_type = "--output-exe",
         trim_mode = "safe",
-        verbose = true,
+        quiet = true,
     )
     JuliaC.compile_products(img)
     link = JuliaC.LinkRecipe(image_recipe=img, outname=exeout, rpath=JuliaC.RPATH_BUNDLE)
@@ -574,8 +573,6 @@ end
     @test isfile(actual_exe)
     output = read(`$actual_exe`, String)
     @test occursin("Fast compilation test!", output)
-    # Print tree for debugging/inspection
-    print_tree_with_sizes(outdir)
 end
 
 @testset "Relative `[sources]` dep path (#153)" begin
@@ -590,7 +587,7 @@ end
         output_type = "--output-exe",
         project = relapp_proj,
         trim_mode = "safe",
-        verbose = true,
+        quiet = true,
     )
     JuliaC.compile_products(img)
     link = JuliaC.LinkRecipe(image_recipe=img, outname=exeout, rpath=JuliaC.RPATH_BUNDLE)

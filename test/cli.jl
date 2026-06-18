@@ -17,7 +17,7 @@ end
         "--trim=safe",
         TEST_PROJ,
         "--bundle", outdir,
-        "--verbose",
+        "--quiet",
     ]
     # Shell out to simulate user invocation
     run_juliac_cli(cliargs)
@@ -25,7 +25,6 @@ end
     @test isfile(actual_exe)
     output = read(`$actual_exe`, String)
     @test occursin("Fast compilation test!", output)
-    print_tree_with_sizes(outdir)
 end
 
 # Windows expects all binaries to be next to each other, so we can't test this
@@ -39,7 +38,7 @@ if Sys.isunix()
             "--output-exe", exename,
             "--trim=safe",
             TEST_PROJ,
-            "--verbose",
+            "--quiet",
         ]
         # Run in outdir so the exe is created there
         run_juliac_cli(cliargs; dir=outdir)
@@ -63,7 +62,7 @@ end
         joinpath(@__DIR__, "libsimple.jl"),
         "--export-abi",
         abiout,
-        "--verbose",
+        "--quiet",
     ]
     run_juliac_cli(cliargs)
     str = read(abiout, String)
@@ -153,7 +152,7 @@ end
         TEST_LIB_SRC,
         "--bundle", outdir,
         "--privatize",
-        "--verbose",
+        "--quiet",
     ]
     run_juliac_cli(cliargs)
     dlext = Base.BinaryPlatforms.platform_dlext()
@@ -199,7 +198,6 @@ end
         "--bundle", outdir,
     ]
     img2, link2, bun2 = JuliaC._parse_cli_args(args2)
-    @show img2.add_ccallables
     @test img2.output_type == "--output-lib"
     @test img2.add_ccallables
     @test "--experimental" in img2.julia_args
@@ -320,7 +318,7 @@ end
     exename = "app_pkgapp"
     cmd = addenv(
         `$(Base.julia_cmd()) --startup-file=no --history-file=no --project=$(projectroot) -m JuliaC
-         --output-exe $exename $(TEST_PROJ) --bundle $outdir --verbose`,
+         --output-exe $exename $(TEST_PROJ) --bundle $outdir --quiet`,
         "JULIA_LOAD_PATH" => projectroot * "/",
     )
     @test success(cmd)
@@ -346,7 +344,7 @@ end
         "--trim=safe",
         projdir,
         "--bundle", outdir,
-        "--verbose",
+        "--quiet",
     ]
     run_juliac_cli(cliargs)
     actual_exe = Sys.iswindows() ? joinpath(outdir, "bin", exename * ".exe") : joinpath(outdir, "bin", exename)
@@ -409,7 +407,7 @@ if Sys.isunix()
         @test isfile(shim)
 
         build_cmd = addenv(
-            `$shim --output-exe $exename $(TEST_PROJ) --bundle $outdir --verbose`,
+            `$shim --output-exe $exename $(TEST_PROJ) --bundle $outdir --quiet`,
             "PATH" => bindir * sep * ENV["PATH"],
         )
         @test success(build_cmd)
