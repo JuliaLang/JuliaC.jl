@@ -124,6 +124,8 @@ function privatize_libjulia!(recipe::BundleRecipe)
         privatize_libjulia_macos!(recipe)
     elseif Sys.islinux()
         privatize_libjulia_linux!(recipe)
+    elseif Sys.iswindows()
+        privatize_libjulia_windows!(recipe)
     else
         @warn "Privatization not implemented for this OS"
     end

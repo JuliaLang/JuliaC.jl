@@ -38,6 +38,32 @@ function get_rpath(recipe::LinkRecipe)
     return string(flag1, " ", flag2)
 end
 
+# Resolve the bin/ directory of the bundled mingw-w64 toolchain (winlibs MinGW-w64
+# GCC distribution). This artifact is os="windows"-gated and lazy, so this only
+# resolves on Windows. It ships the full binutils suite (gcc.exe, g++.exe, objcopy.exe,
+# windres.exe, ld.exe, dlltool.exe, as.exe) in one directory.
+function mingw_bindir()
+    # The `@artifact_str` macro expands at compile time and the artifact entry is
+    # os="windows"-gated, so it is unresolvable off-Windows. Guard with `@static if`
+    # so the macro is only expanded (and the lookup only attempted) on Windows; on
+    # other platforms this helper is never reached by the privatization path.
+    @static if Sys.iswindows()
+        return joinpath(LazyArtifacts.artifact"mingw-w64",
+                        "extracted_files",
+                        (Int == Int64 ? "mingw64" : "mingw32"),
+                        "bin")
+    else
+        error("mingw_bindir() is only available on Windows")
+    end
+end
+
+# Absolute path to a named tool (e.g. "gcc.exe", "objcopy.exe") in the mingw bin dir.
+function mingw_tool(name::AbstractString)
+    tool = joinpath(mingw_bindir(), name)
+    isfile(tool) || error("expected mingw tool not found: $tool")
+    return tool
+end
+
 function get_compiler_cmd(; cplusplus::Bool=false)
     cc = get(ENV, "JULIA_CC", nothing)
     path = nothing
@@ -46,11 +72,7 @@ function get_compiler_cmd(; cplusplus::Bool=false)
         path = nothing
     else
         @static if Sys.iswindows()
-            path = joinpath(LazyArtifacts.artifact"mingw-w64",
-                            "extracted_files",
-                            (Int==Int64 ? "mingw64" : "mingw32"),
-                            "bin",
-                            cplusplus ? "g++.exe" : "gcc.exe")
+            path = mingw_tool(cplusplus ? "g++.exe" : "gcc.exe")
             compiler_cmd = `$path`
         else
             compilers_cpp = ("g++", "clang++")
