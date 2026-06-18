@@ -76,20 +76,20 @@ end
     CVector_Float32 = abi["types"][findfirst(type["name"] == "CVector{Float32}" for type in abi["types"])]
     @test length(CVector_Float32["fields"]) == 2
     @test CVector_Float32["fields"][1]["offset"] == 0
-    @test CVector_Float32["fields"][2]["offset"] == 8
+    @test CVector_Float32["fields"][2]["offset"] == sizeof(UInt)
     @test abi["types"][CVector_Float32["fields"][1]["type_id"]]["name"] == "Int32"
     @test abi["types"][CVector_Float32["fields"][2]["type_id"]]["name"] == "Ptr{Float32}"
-    @test CVector_Float32["size"] == 16
+    @test CVector_Float32["size"] == sizeof(UInt) * 2
 
     # `CVectorPair{Float32}` should have been exported with the correct info
     @test any(Bool[type["name"] == "CVectorPair{Float32}" for type in abi["types"]])
     CVectorPair_Float32 = abi["types"][findfirst(type["name"] == "CVectorPair{Float32}" for type in abi["types"])]
     @test length(CVectorPair_Float32["fields"]) == 2
     @test CVectorPair_Float32["fields"][1]["offset"] == 0
-    @test CVectorPair_Float32["fields"][2]["offset"] == 16
+    @test CVectorPair_Float32["fields"][2]["offset"] == sizeof(UInt) * 2
     @test abi["types"][CVectorPair_Float32["fields"][1]["type_id"]]["name"] == "CVector{Float32}"
     @test abi["types"][CVectorPair_Float32["fields"][2]["type_id"]]["name"] == "CVector{Float32}"
-    @test CVectorPair_Float32["size"] == 32
+    @test CVectorPair_Float32["size"] == sizeof(UInt) * 4
 
     # `CTree{Float64}` should have been exported with the correct info
     @test any(Bool[type["name"] == "CTree{Float64}" for type in abi["types"]])

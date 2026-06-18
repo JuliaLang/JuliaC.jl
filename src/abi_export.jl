@@ -103,9 +103,10 @@ function emit_struct_info!(ctx::TypeEmitter, @nospecialize(dt::DataType); indent
         indented_println("  \"size\": ", Core.sizeof(dt), ",")
         indented_println("  \"alignment\": ", Base.datatype_alignment(dt), ",")
         indented_println("  \"fields\": [")
-        for i = 1:Base.datatype_nfields(dt)
+        nfields = Int(Base.datatype_nfields(dt))
+        for i = 1:nfields
             emit_field_info!(ctx, dt, i; indent = indent + 4)
-            println(ctx.io, i == Base.datatype_nfields(dt) ? "" : ",")
+            println(ctx.io, i == nfields ? "" : ",")
         end
         indented_println("  ]")
         print(ctx.io, " " ^ indent, "}")
