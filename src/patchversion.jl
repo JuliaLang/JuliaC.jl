@@ -1,6 +1,6 @@
 module PatchVersion
 
-export patch_version, patch_version!
+export patch_version, patch_version!, read_soname, read_needed, set_soname!, replace_needed!
 
 import ObjectFile: ObjectFile, ELFHandle, StrTab, SectionRef, Sections, strtab_lookup,
     ELF, section_offset, section_size
@@ -21,7 +21,10 @@ function patch_str!(tab::SectionRef, pos, newstr::Vector{UInt8})
     old = readuntil(ObjectFile.handle(tab), UInt8(0))
     pad = length(old) - length(newstr)
     if pad < 0
-        error(string("Length mismatch; can't overwrite $old with $newstr"))
+        error("""
+              cannot patch ELF string table in place: replacement $(repr(String(copy(newstr)))) \
+              ($(length(newstr)) bytes) is longer than the existing entry $(repr(String(copy(old)))) \
+              ($(length(old)) bytes). In-place .dynstr patching can only shrink or keep length, never grow.""")
     elseif pad > 0
         newstr = vcat(newstr, fill(UInt8(0), pad))
     end
@@ -62,10 +65,13 @@ Update version strings and hashes in-place.  Touches the .dynstr, .gnu.version_d
 function patch_version!(infile::AbstractString, oldver::Vector{UInt8}, newver::Vector{UInt8};
                         patch_def=true, patch_need=true, patch_strtab=true)
     if length(oldver) < length(newver)
-        error(string("Length mismatch; can't overwrite $oldver with $newver"))
+        error("""
+              cannot patch version string in place: new version $(repr(String(copy(newver)))) \
+              ($(length(newver)) bytes) is longer than old version $(repr(String(copy(oldver)))) \
+              ($(length(oldver)) bytes); the replacement must be the same length or shorter.""")
     end
 
-    open(infile, read=true, write=true, create=false, truncate=false) do io
+    open(infile; read=true, write=true, create=false, truncate=false) do io
         oh = only(ObjectFile.readmeta(io))
         tab = findfirst(Sections(oh), ".dynstr")
 
@@ -140,5 +146,84 @@ end
 # Handle string versions
 patch_version(i, o, n, out; kwargs...) = patch_version(i, Vector{UInt8}(o), Vector{UInt8}(n), out; kwargs...)
 patch_version!(i, o, n; kwargs...) = patch_version!(i, Vector{UInt8}(o), Vector{UInt8}(n); kwargs...)
+
+# DT_SONAME / DT_NEEDED in-place patching via patch_str! (same-length or shorter; never grows).
+
+# The .dynstr section a dynamic entry's string lives in (via the .dynamic sh_link).
+_dynstr_section(oh, d) = Sections(oh)[ObjectFile.deref(ObjectFile.Section(d)).sh_link + 1]
+
+# Overwrite dynamic entry `d`'s .dynstr string with `newstr` in place (errors on grow or overlap).
+function _patch_dyn_string!(oh::ELFHandle, d, newstr::Vector{UInt8})
+    # Any ELF class/endianness: ObjectFile.jl decodes fields per the header; string bytes are raw ASCII.
+    pos = Int(ObjectFile.deref(d).d_val)
+    tab = _dynstr_section(oh, d)
+    seek(tab, pos)
+    oldlen = length(readuntil(ObjectFile.handle(tab), UInt8(0)))
+    # Refuse if the target's [string+NUL] range overlaps any other .dynstr record (tail-merge: target is a longer string's shared suffix, so even an equal-length overwrite corrupts it).
+    seek(ObjectFile.handle(tab).io, section_offset(tab))
+    bytes = read(ObjectFile.handle(tab).io, Int(section_size(tab)))
+    start = 0
+    for i in 0:length(bytes)-1
+        bytes[i + 1] == 0x00 || continue
+        rlen = i - start
+        if rlen > 0 && start != pos && !(start + rlen < pos || start > pos + oldlen)
+            error("Refusing in-place .dynstr patch at $pos [len $oldlen]: overlaps string at $start (tail-merged string table)")
+        end
+        start = i + 1
+    end
+    patch_str!(tab, pos, newstr)
+    return nothing
+end
+
+"""
+    read_soname(file)::Union{String,Nothing}
+
+Return the `DT_SONAME` string of an ELF shared object, or `nothing` if it has none.
+"""
+read_soname(file) = open(file) do io
+    oh = only(ObjectFile.readmeta(io))
+    es = ELF.ELFDynEntries(oh, [ELF.DT_SONAME])
+    isempty(es) ? nothing : String(strtab_lookup(only(es)))
+end
+
+"""
+    read_needed(file)::Vector{String}
+
+Return all `DT_NEEDED` entries of an ELF shared object, in order.
+"""
+read_needed(file) = open(file) do io
+    oh = only(ObjectFile.readmeta(io))
+    String[String(strtab_lookup(d)) for d in ELF.ELFDynEntries(oh, [ELF.DT_NEEDED])]
+end
+
+"""
+    set_soname!(file, newname)
+
+Rewrite the `DT_SONAME` of an ELF shared object in place.  Errors if `file` has
+no `DT_SONAME` or if `newname` is longer than the current soname.
+"""
+function set_soname!(file, newname)
+    open(file; read=true, write=true, create=false, truncate=false) do io
+        oh = only(ObjectFile.readmeta(io))
+        es = ELF.ELFDynEntries(oh, [ELF.DT_SONAME])
+        isempty(es) && error("no DT_SONAME in $file")
+        _patch_dyn_string!(oh, only(es), Vector{UInt8}(newname))
+    end
+end
+
+"""
+    replace_needed!(file, oldname, newname)
+
+Rename the single `DT_NEEDED` entry equal to `oldname` to `newname`, in place.
+Asserts exactly one entry matches `oldname`; errors if `newname` is longer.
+"""
+function replace_needed!(file, oldname, newname)
+    open(file; read=true, write=true, create=false, truncate=false) do io
+        oh = only(ObjectFile.readmeta(io))
+        matches = filter(d -> strtab_lookup(d) == oldname, ELF.ELFDynEntries(oh, [ELF.DT_NEEDED]))
+        @assert length(matches) == 1 "expected exactly one DT_NEEDED == \"$oldname\" in $file, got $(length(matches))"
+        _patch_dyn_string!(oh, only(matches), Vector{UInt8}(newname))
+    end
+end
 
 end
