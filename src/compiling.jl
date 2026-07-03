@@ -37,35 +37,21 @@ function _start_spinner(message::String; io::IO=stderr)
     return finished, task
 end
 
-function _absolutize_paths!(x, base)
-    if x isa AbstractDict
-        p = get(x, "path", nothing)
-        if p isa AbstractString && !isabspath(p)
-            x["path"] = abspath(joinpath(base, p))
-        end
-        for v in values(x)
-            _absolutize_paths!(v, base)
-        end
-    elseif x isa AbstractVector
-        for v in values(x)
-            _absolutize_paths!(v, base)
-        end
-    end
-end
 
-# Replace `[sources]` with absolute paths, referenced to `basedir`
-function absolutize_paths!(project_dir, basedir)
-    for f in readdir(project_dir)
-        occursin(r"^(Julia)?(Project|Manifest).*\.toml$", f) || continue
-        file = joinpath(project_dir, f)
-        let data = TOML.parsefile(file)
-            _absolutize_paths!(data, basedir)
-            open(file, "w") do io
-                TOML.print(io, data)
-            end
-        end
-    end
-    return nothing
+# Return `true` if the access permissions for the given directory permitted writing.
+# Replace with `Base.iswritable(dir)` once Julia 1.10 support is dropped (added in 1.11).
+iswritable(dir::AbstractString) = ccall(:jl_fs_access, Cint, (Cstring, Cint), dir, 0x02) == 0
+
+# A throwaway environment that carries HostCPUFeatures' `freeze_cpu_target` build
+# preference. Placed on the load path so the preference applies as a default
+# without writing into the user's project.
+function hostcpufeatures_freeze_overlay()
+    dir = mktempdir()
+    write(joinpath(dir, "Project.toml"),
+          "[deps]\nHostCPUFeatures = \"3e5b6fbb-0976-4d2c-9146-d79de83f2fb0\"\n")
+    write(joinpath(dir, "LocalPreferences.toml"),
+          "[HostCPUFeatures]\nfreeze_cpu_target = true\n")
+    return dir
 end
 
 function run_with_suppressed_output(cmd::Base.AbstractCmd; quiet::Bool)
@@ -129,55 +115,42 @@ function compile_products(recipe::ImageRecipe)
 
     project_arg = recipe.project == "" ? Base.active_project() : recipe.project
 
-    # Always copy the project to a temp dir so Pkg.instantiate() can write Manifest.toml etc.
-    # This avoids failures when the project dir is read-only (e.g. installed packages).
-    # project_arg may be a Project.toml path (from Base.active_project()) or a directory.
-    project_dir = isdir(project_arg) ? project_arg : dirname(project_arg)
-    tmp_project = mktempdir()
-    for f in readdir(project_dir)
-        src = joinpath(project_dir, f)
-        dst = joinpath(tmp_project, f)
-        cp(src, dst; force=true)
-    end
-    # Ensure copied files are writable — Pkg-installed packages are read-only,
-    # and cp() preserves permissions. Pkg.instantiate() needs to write Manifest.toml etc.
-    for (root, dirs, files) in walkdir(tmp_project)
-        for name in Iterators.flatten((dirs, files))
-            p = joinpath(root, name)
-            chmod(p, filemode(p) | 0o200)
-        end
-    end
-    project_arg = isdir(project_arg) ? tmp_project : joinpath(tmp_project, basename(project_arg))
+    # The following avoids writing into the project directory while keeping the
+    # build reproducible without copying anything.
+    # `project_arg` may be a Project.toml path (from Base.active_project()) or a directory.
+    project_dir = abspath(isdir(project_arg) ? project_arg : dirname(project_arg))
+    pf = Base.env_project_file(project_dir)
+    project_file = pf isa String ? pf : joinpath(project_dir, "Project.toml")
 
-    # Update any `[sources]` to refer to the original `project_dir`
-    absolutize_paths!(tmp_project, project_dir)
+    # A build needs a resolved manifest. Without one, it has to be written, which
+    # requires a writable project. Resolve in place when possible; refuse on
+    # read-only sources rather than resolving into a throwaway, non-reproducible manifest.
+    if Base.project_file_manifest_path(project_file) === nothing && !iswritable(project_dir)
+        error("No Manifest.toml for \"$project_dir\" and the directory is read-only. " *
+              "Run `Pkg.instantiate` or make it writable.")
+    end
 
-    # Always clear JULIA_LOAD_PATH to prevent parent environment leakage
-    # (e.g. when JuliaC is invoked as a Pkg app, the shim sets JULIA_LOAD_PATH
-    # to JuliaC's own project, which would break user project compilation — #106/#124).
+    # Give the subprocess a hermetic load path so a leaked parent JULIA_LOAD_PATH
+    # cannot influence resolution (e.g. the Pkg-app shim points it at JuliaC's own
+    # project — #106/#124). Unsetting it falls back to Julia's default load path.
     env_overrides = Dict{String,Any}("JULIA_LOAD_PATH" => nothing)
-
     if is_trim_enabled(recipe)
-        # Inject the HostCPUFeatures `freeze_cpu_target` preference directly into the
-        # temp project copy so it's visible without JULIA_LOAD_PATH manipulation.
-        tmp_project_dir = isdir(project_arg) ? project_arg : dirname(project_arg)
-        Preferences.set_preferences!(
-            (Base.UUID("3e5b6fbb-0976-4d2c-9146-d79de83f2fb0"), "HostCPUFeatures"),
-            "freeze_cpu_target" => true;
-            project_toml = joinpath(tmp_project_dir, "Project.toml"),
-            export_prefs = true,
-            force = true,
-        )
+        # Supply HostCPUFeatures' `freeze_cpu_target` preference from a throwaway
+        # overlay environment. A leading empty entry expands to the default load
+        # path; the overlay follows as a lowest-priority default, so the user's
+        # active project still wins.
+        overlay = hostcpufeatures_freeze_overlay()
+        env_overrides["JULIA_LOAD_PATH"] = (Sys.iswindows() ? ";" : ":") * overlay
     end
 
-    inst_cmd = addenv(`$(Base.julia_cmd(cpu_target=precompile_cpu_target)) --project=$project_arg -e "using Pkg; Pkg.instantiate(); Pkg.precompile()"`, env_overrides...)
+    inst_cmd = addenv(`$(Base.julia_cmd(cpu_target=precompile_cpu_target)) --project=$project_dir -e "using Pkg; Pkg.instantiate(); Pkg.precompile()"`, env_overrides...)
     recipe.verbose && println("Running: $inst_cmd")
     precompile_time = time_ns()
     if !run_with_suppressed_output(inst_cmd; quiet=recipe.quiet)
         error("Error encountered during instantiate/precompile of app project.")
     end
-    # Record the instantiated project dir for future bundling steps, cleanup, etc.
-    recipe.instantiated_project = tmp_project
+    # Record the project dir for future bundling steps.
+    recipe.instantiated_project = project_dir
     recipe.verbose && println("Precompilation took $((time_ns() - precompile_time)/1e9) s")
     # Compile the Julia code
     if recipe.img_path == ""
@@ -186,7 +159,7 @@ function compile_products(recipe::ImageRecipe)
     end
     # Build command incrementally to guarantee proper token separation
     cmd = julia_cmd
-    cmd = `$cmd --project=$project_arg $(image_arg) $(recipe.img_path) --output-incremental=no`
+    cmd = `$cmd --project=$project_dir $(image_arg) $(recipe.img_path) --output-incremental=no`
     for a in strip_args
         cmd = `$cmd $a`
     end
