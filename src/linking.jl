@@ -149,7 +149,8 @@ function link_products(recipe::LinkRecipe)
         elseif Sys.isapple()
             cmd2 = `$cmd2 -Wl,-install_name,@rpath/$(lib_name)`
         elseif Sys.islinux()
-            cmd2 = `$cmd2 -Wl,-soname,$(lib_name)`
+            # Link libm if the compiled code references math symbols, e.g. with --cpu-target=generic
+            cmd2 = `$cmd2 -Wl,-soname,$(lib_name) -Wl,--as-needed -lm`
         end
         image_recipe.verbose && println("Running: $cmd2")
         run_with_suppressed_output(cmd2; quiet=image_recipe.quiet) ||
