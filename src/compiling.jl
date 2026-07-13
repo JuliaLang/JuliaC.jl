@@ -332,7 +332,7 @@ function _compile_jl_options_shim(jl_options::Dict{String,String}; verbose::Bool
     # Validate by running julia with the same flags.
     if !isempty(jl_options)
         julia_bin = joinpath(Sys.BINDIR, "julia")
-        validate_cmd = `$julia_bin`
+        validate_cmd = `$julia_bin --startup-file=no`
         for (key, value) in jl_options
             validate_cmd = `$validate_cmd --$(key)=$(value)`
         end
