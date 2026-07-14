@@ -72,6 +72,7 @@ include("patchversion.jl")
 include("privatize_common.jl")
 include("privatize_linux.jl")
 include("privatize_macos.jl")
+include("privatize_windows.jl")
 
 export ImageRecipe, LinkRecipe, BundleRecipe
 export compile_products, link_products, bundle_products

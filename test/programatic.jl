@@ -261,6 +261,115 @@
             @test ver.minor == 32767
         end
     end
+
+    @testset "Windows privatization injects manifest + fixes libpath" begin
+        if Sys.iswindows()
+            outdir = mktempdir()
+            libname = "libwinprivtest"
+            libout = joinpath(outdir, libname)
+            link = JuliaC.LinkRecipe(image_recipe=img_lib, outname=libout, rpath=JuliaC.RPATH_BUNDLE)
+            JuliaC.link_products(link)
+            bun = JuliaC.BundleRecipe(link_recipe=link, output_dir=outdir, privatize=true)
+            JuliaC.bundle_products(bun)
+
+            product = joinpath(outdir, "bin", libname * "." * Base.BinaryPlatforms.platform_dlext())
+            @test isfile(product)
+
+            # (a) The product PE now has a .rsrc section (read via ObjectFile, already a dep).
+            rsrc_va = open(product) do io
+                oh = only(JuliaC.ObjectFile.readmeta(io))
+                rsrc = JuliaC.ObjectFile.findfirst(JuliaC.ObjectFile.Sections(oh), ".rsrc")
+                @test rsrc !== nothing
+                rsrc === nothing ? UInt32(0) : UInt32(JuliaC.ObjectFile.section_address(rsrc))
+            end
+
+            # (b) The optional header's ResourceTable data directory now points at .rsrc.
+            #     Read it with raw seek/read to mirror the ld_flags testset's style and to
+            #     independently confirm the COFF patch landed (datadirs_offset reasoning
+            #     verified against a real PE during planning).
+            rt = open(product) do io
+                seek(io, 0x3C); pe_off = read(io, UInt32)
+                opt_hdr = pe_off + 4 + 20                 # PE sig (4) + COFF header (20)
+                seek(io, opt_hdr); magic = read(io, UInt16)
+                # 64-bit: standard(24) + windows64(88) = 112 to the data directories;
+                # 32-bit: standard(24) + BaseOfData(4) + windows32(68) = 96.
+                dd = opt_hdr + (magic == 0x20b ? 112 : 96)
+                seek(io, dd + 0x10)                        # ResourceTable slot
+                (va = read(io, UInt32), size = read(io, UInt32))
+            end
+            @test rt.va == rsrc_va
+            @test rt.va != 0
+            @test rt.size != 0
+
+            # (c) The bundled libjulia.dll no longer contains the "../bin/" prefix.
+            libjulia = joinpath(outdir, "bin", "libjulia.dll")
+            @test isfile(libjulia)
+            @test !occursin("../bin/", String(read(libjulia)))
+        end
+    end
+
+    @testset "Privatized library loads its own runtime copy (Windows)" begin
+        # SxS-manifest guarantee: loaded into a process that already has the runtime, the product loads its own sibling DLLs, so Libdl.dllist() shows two distinct runtime copies.
+        if Sys.iswindows()
+            outdir = mktempdir()
+            libname = "libwinprivloadtest"
+            libout = joinpath(outdir, libname)
+            link = JuliaC.LinkRecipe(image_recipe=img_lib, outname=libout, rpath=JuliaC.RPATH_BUNDLE)
+            JuliaC.link_products(link)
+            bun = JuliaC.BundleRecipe(link_recipe=link, output_dir=outdir, privatize=true)
+            JuliaC.bundle_products(bun)
+
+            bindir = joinpath(outdir, "bin")
+            product = joinpath(bindir, libname * "." * Base.BinaryPlatforms.platform_dlext())
+            @test isfile(product)
+            @test isfile(joinpath(bindir, "libjulia.dll"))
+
+            # Load the product in a fresh Julia process (which already has the runtime loaded) and inspect Libdl.dllist(), mirroring the Unix "Julia dlopen test" above.
+            # Flushed markers localize the hang (M2 dirs right after dlopen tells us whether
+            # SxS activated, BEFORE the first ccall that triggers the product's runtime init);
+            # the watchdog ensures CI can never again hit the 6h job limit.
+            product_literal = repr(product)
+            bindir_literal = repr(bindir)
+            snippet = """
+                using Libdl
+                errln(s) = (println(stderr, s); flush(stderr))
+                libdirs() = unique(map(p -> lowercase(abspath(dirname(p))),
+                                       filter(p -> occursin("libjulia", lowercase(basename(p))), Libdl.dllist())))
+                errln("M1_PRE_DLOPEN dirs=" * string(libdirs()))
+                h = Libdl.dlopen($product_literal, Libdl.RTLD_LOCAL)
+                errln("M2_POST_DLOPEN dirs=" * string(libdirs()))   # bundled dir present here => SxS activated
+                sym = Libdl.dlsym(h, :jc_add_one)
+                errln("M3_POST_DLSYM")
+                errln("M4_PRE_CCALL")
+                r = ccall(sym, Cint, (Cint,), 41)                   # first ccall triggers the product's runtime init
+                errln("M5_POST_CCALL r=" * string(r))
+                println("RESULT=", r)
+                d = libdirs()
+                println("DISTINCT_DIRS=", length(d))
+                println("HAS_BUNDLED=", lowercase(abspath($bindir_literal)) in d)
+                try Libdl.dlclose(h) catch end
+                """
+            logf = joinpath(outdir, "winload.log")
+            proc = run(pipeline(`$(Base.julia_cmd()) --startup-file=no --history-file=no -e $snippet`;
+                                stdout=logf, stderr=logf); wait=false)
+            @async begin
+                sleep(180)
+                Base.process_running(proc) && (kill(proc); @warn "Windows load test exceeded 180s; killed")
+            end
+            wait(proc)
+            out = isfile(logf) ? read(logf, String) : ""
+            @info "Windows privatized-load diagnostic:\n$out"
+
+            # The exported symbol still resolves through the privatized runtime.
+            @test occursin("RESULT=42", out)
+            # The bundled directory is one of the distinct runtime-library locations.
+            @test occursin("HAS_BUNDLED=true", out)
+            # >= 2 distinct dirs now host the runtime libs: host/system + bundled.
+            m = match(r"DISTINCT_DIRS=(\d+)", out)
+            @test m !== nothing
+            @test parse(Int, m.captures[1]) >= 2
+        end
+    end
 end
 
 @testset "Programmatic binary (trim)" begin
