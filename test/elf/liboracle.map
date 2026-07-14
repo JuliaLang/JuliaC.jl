@@ -1,0 +1,16 @@
+LIBORACLE_1.1 {
+  global:
+    g1;
+  local:
+    *;
+};
+
+LIBORACLE_1.2 {
+  global:
+    g2;
+} LIBORACLE_1.1;
+
+LIBORACLE_2.0 {
+  global:
+    g3;
+} LIBORACLE_1.2;

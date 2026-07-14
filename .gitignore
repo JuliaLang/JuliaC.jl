@@ -1,3 +1,6 @@
 .DS_Store
 *Manifest*.toml
 .vscode
+test/elf/liboracle.so
+test/elf/libclient.so
+test/elf/*.o
