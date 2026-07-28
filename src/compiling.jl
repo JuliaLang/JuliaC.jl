@@ -203,6 +203,12 @@ function compile_products(recipe::ImageRecipe)
     if recipe.export_abi !== nothing
         cmd = `$cmd --export-abi $(recipe.export_abi)`
     end
+    if !isempty(recipe.link_native_libs)
+        # The buildscript registers these with the runtime before any user code
+        # (and therefore any ccall lowering) runs; the AOT stub-emission pass
+        # consults that table to decide which ccalls to bind natively.
+        cmd = `$cmd --link-native $(join(recipe.link_native_libs, ','))`
+    end
 
     # Threading
     cmd = addenv(cmd, env_overrides...)

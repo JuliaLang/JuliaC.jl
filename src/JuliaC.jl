@@ -33,6 +33,10 @@ Base.@kwdef mutable struct ImageRecipe
     cflags::Vector{String} = String[]
     extra_objects::Vector{String} = String[]
     export_abi::Union{String, Nothing} = nothing
+    # Libraries to bind via direct external symbol references at link time
+    # instead of through Julia's lazy ccall stubs. Entries are
+    # `AbstractLibrary` `dlname()` values (e.g. `libzstd` for Zstd_jll).
+    link_native_libs::Vector{String} = String[]
     # Julia CLI option overrides applied via jl_parse_opts in a constructor before jl_init.
     # Keys and values use Julia CLI syntax (e.g. "handle-signals" => "no", "threads" => "1").
     # Auto-populated with safe defaults for --output-lib.
@@ -102,6 +106,10 @@ function _print_usage(io::IO=stdout)
     println(io, "  --compile-ccallable         Export ccallable entrypoints")
     println(io, "  --jl-option <key=value>     Set a Julia option using CLI syntax (supported: handle-signals=[yes/no], threads=[N])")
     println(io, "  --export-abi <file>         Emit type / function information for the ABI (in JSON format)")
+    println(io, "  --link-native <names>       Comma-separated library names to bind via direct external")
+    println(io, "                              symbols at link time instead of Julia's lazy ccall stubs.")
+    println(io, "                              Names are `AbstractLibrary` `dlname()` values")
+    println(io, "                              (e.g. `libzstd` for Zstd_jll).")
     println(io, "  --experimental              Forwarded to Julia (needed for --trim)")
     println(io, "  --verbose                   Print commands and timings")
     println(io, "  --quiet                     Suppress build output unless a step fails")
@@ -162,6 +170,17 @@ function _parse_cli_args(args::Vector{String})
             i == length(args) && error("--export-abi requires an argument")
             image_recipe.export_abi = args[i+1]
             i += 1
+        elseif startswith(arg, "--link-native")
+            if startswith(arg, "--link-native=")
+                names = split(arg, '='; limit=2)[2]
+            else
+                i == length(args) && error("--link-native requires a comma-separated list of library names")
+                names = args[i+1]
+                i += 1
+            end
+            for name in split(names, ','; keepempty=false)
+                push!(image_recipe.link_native_libs, String(name))
+            end
         elseif startswith(arg, "--project")
             if occursin('=', arg)
                 proj = split(arg, '='; limit=2)[2]

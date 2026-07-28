@@ -29,13 +29,17 @@ end
 #   --use-loaded-libs            : Enable Libdl.dlopen override to reuse existing loads.
 #   --scripts-dir <path>         : Directory containing build helper scripts.
 #   --export-abi <path>          : Emit JSON ABI spec
-source_path, output_type, add_ccallables, use_loaded_libs, scripts_dir, export_abi = let
+#   --link-native <names>        : Comma-separated library names to bind via direct
+#                                  external symbols at link time.
+source_path, output_type, add_ccallables, use_loaded_libs, scripts_dir, export_abi,
+        link_native_libs = let
     source_path = ""
     output_type = ""
     add_ccallables = false
     use_loaded_libs = false
     scripts_dir = abspath(dirname(PROGRAM_FILE))
     export_abi = nothing
+    link_native_libs = String[]
     it = Iterators.Stateful(ARGS)
     for arg in it
         if startswith(arg, "--source=")
@@ -58,10 +62,33 @@ source_path, output_type, add_ccallables, use_loaded_libs, scripts_dir, export_a
             use_loaded_libs = true
         elseif arg == "--export-abi"
             export_abi = popfirst!(it)
+        elseif startswith(arg, "--link-native=")
+            names = split(arg, "=", limit=2)[2]
+            append!(link_native_libs, String(n) for n in split(names, ',', keepempty=false))
+        elseif arg == "--link-native"
+            names = popfirst!(it)
+            names === nothing && error("Missing value for --link-native")
+            append!(link_native_libs, String(n) for n in split(names, ',', keepempty=false))
         end
     end
     source_path == "" && error("Missing required --source <path>")
-    (source_path, output_type, add_ccallables, use_loaded_libs, scripts_dir, export_abi)
+    (source_path, output_type, add_ccallables, use_loaded_libs, scripts_dir, export_abi,
+     link_native_libs)
+end
+
+# Native-link policy. Must be registered with the runtime before any user code
+# (and therefore any ccall lowering) runs.
+if !isempty(link_native_libs)
+    let handle = Base.Libc.Libdl.dlopen("libjulia-internal"; throw_error=false)
+        if handle === nothing ||
+                Base.Libc.Libdl.dlsym(handle, :jl_add_native_link_lib; throw_error=false) === nothing
+            error("--link-native requires a Julia runtime with native-link support; " *
+                  "this Julia ($(VERSION)) does not provide it.")
+        end
+    end
+    for name in link_native_libs
+        ccall(:jl_add_native_link_lib, Cvoid, (Cstring,), name)
+    end
 end
 
 # Load user code

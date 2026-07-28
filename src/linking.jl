@@ -84,6 +84,25 @@ function get_compiler_cmd(; cplusplus::Bool=false)
     return compiler_cmd
 end
 
+# Map each `--link-native=<name>` to a linker argument. Two shapes:
+#   - SONAME-style names containing `.so` or ending in `.a` (e.g. `libopenblas64_.so`,
+#     produced by `Libdl.LazyLibrary`'s default `dlname`) → `-l:<name>`, which tells
+#     GNU ld to match the filename exactly.
+#   - Bare product names (e.g. `libbzip2`, produced by `JLLWrappers.JLLLibrary`)
+#     → `-l<name without leading "lib">`, the standard ld convention.
+# `-L` search paths are the user's responsibility (pass them via `ld_flags`).
+function native_link_args(link_native_libs::Vector{String})
+    args = String[]
+    for name in link_native_libs
+        if occursin(".so", name) || endswith(name, ".a")
+            push!(args, "-l:" * name)
+        else
+            push!(args, startswith(name, "lib") ? "-l" * name[4:end] : "-l" * name)
+        end
+    end
+    return args
+end
+
 function link_products(recipe::LinkRecipe)
     link_start = time_ns()
     image_recipe = recipe.image_recipe
@@ -134,6 +153,10 @@ function link_products(recipe::LinkRecipe)
         end
         # Link in the whole archive and user-provided objects, then undo WHOLE_ARCHIVE
         cmd2 = `$cmd2 -Wl,$(Base.Linking.WHOLE_ARCHIVE) $(image_recipe.img_path) $(image_recipe.extra_objects) -Wl,$(Base.Linking.NO_WHOLE_ARCHIVE) $(julia_libs)`
+        # Libraries bound via direct external symbols rather than lazy ccall stubs
+        if !isempty(image_recipe.link_native_libs)
+            cmd2 = `$cmd2 $(native_link_args(image_recipe.link_native_libs))`
+        end
         if Sys.ARCH === :i686
             # On 32-bit x86, Julia's 64-bit atomics require libatomic
             cmd2 = `$cmd2 -latomic`
