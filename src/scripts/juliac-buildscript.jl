@@ -31,8 +31,9 @@ end
 #   --export-abi <path>          : Emit JSON ABI spec
 #   --link-native <names>        : Comma-separated library names to bind via direct
 #                                  external symbols at link time.
+#   --export-foreign-deps <path> : Write a JSON manifest of every ccall/cglobal site.
 source_path, output_type, add_ccallables, use_loaded_libs, scripts_dir, export_abi,
-        link_native_libs = let
+        link_native_libs, export_foreign_deps = let
     source_path = ""
     output_type = ""
     add_ccallables = false
@@ -40,6 +41,7 @@ source_path, output_type, add_ccallables, use_loaded_libs, scripts_dir, export_a
     scripts_dir = abspath(dirname(PROGRAM_FILE))
     export_abi = nothing
     link_native_libs = String[]
+    export_foreign_deps = nothing
     it = Iterators.Stateful(ARGS)
     for arg in it
         if startswith(arg, "--source=")
@@ -69,25 +71,33 @@ source_path, output_type, add_ccallables, use_loaded_libs, scripts_dir, export_a
             names = popfirst!(it)
             names === nothing && error("Missing value for --link-native")
             append!(link_native_libs, String(n) for n in split(names, ',', keepempty=false))
+        elseif startswith(arg, "--export-foreign-deps=")
+            export_foreign_deps = split(arg, "=", limit=2)[2]
+        elseif arg == "--export-foreign-deps"
+            export_foreign_deps = popfirst!(it)
+            export_foreign_deps === nothing && error("Missing value for --export-foreign-deps")
         end
     end
     source_path == "" && error("Missing required --source <path>")
     (source_path, output_type, add_ccallables, use_loaded_libs, scripts_dir, export_abi,
-     link_native_libs)
+     link_native_libs, export_foreign_deps)
 end
 
-# Native-link policy. Must be registered with the runtime before any user code
-# (and therefore any ccall lowering) runs.
-if !isempty(link_native_libs)
+# Native-link policy / foreign-deps export. Both must be registered with the
+# runtime before any user code (and therefore any ccall lowering) runs.
+if !isempty(link_native_libs) || export_foreign_deps !== nothing
     let handle = Base.Libc.Libdl.dlopen("libjulia-internal"; throw_error=false)
         if handle === nothing ||
                 Base.Libc.Libdl.dlsym(handle, :jl_add_native_link_lib; throw_error=false) === nothing
-            error("--link-native requires a Julia runtime with native-link support; " *
-                  "this Julia ($(VERSION)) does not provide it.")
+            error("--link-native / --export-foreign-deps require a Julia runtime with " *
+                  "native-link support; this Julia ($(VERSION)) does not provide it.")
         end
     end
     for name in link_native_libs
         ccall(:jl_add_native_link_lib, Cvoid, (Cstring,), name)
+    end
+    if export_foreign_deps !== nothing
+        ccall(:jl_set_foreign_deps_export_path, Cvoid, (Cstring,), export_foreign_deps)
     end
 end
 

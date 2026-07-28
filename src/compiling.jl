@@ -209,6 +209,9 @@ function compile_products(recipe::ImageRecipe)
         # consults that table to decide which ccalls to bind natively.
         cmd = `$cmd --link-native $(join(recipe.link_native_libs, ','))`
     end
+    if recipe.export_foreign_deps !== nothing
+        cmd = `$cmd --export-foreign-deps $(abspath(recipe.export_foreign_deps))`
+    end
 
     # Threading
     cmd = addenv(cmd, env_overrides...)
