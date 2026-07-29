@@ -1,6 +1,7 @@
 # Trimming tests ported from Base Julia test/trimming/
 
 const TRIM_PROJ = abspath(joinpath(@__DIR__, "TrimmabilityProject"))
+const GC_IMAGE_WB_PROJ = abspath(joinpath(@__DIR__, "GCImageWBProject"))
 
 @testset "Trimming: executable size check" begin
     # Uses the existing TEST_SRC (test.jl) hello world
@@ -109,4 +110,36 @@ end
     @test length(output) == 2
     @test output[1] == "Sum of copied values: 6.000000"
     @test output[2] == "Count of same vectors: 1"
+end
+
+# Regression test for write barriers on image-resident objects
+# (JuliaLang/julia#61474): under `--trim`, an image-resident object can end up
+# unreachable from the GC root set (the fixture re-creates the FileWatching
+# FDWatchers shape: a let-bound local captured by compiled global methods);
+# image objects must load pre-marked so their write barrier is armed from
+# birth, or runtime mutations of them lose their old->young edges and the GC
+# frees live memory. See the fixture for details.
+@testset "Trimming: image-object write barrier regression (GCImageWBProject)" begin
+    outdir = mktempdir()
+    exeout = joinpath(outdir, "gc_image_wb")
+
+    img = JuliaC.ImageRecipe(
+        file = GC_IMAGE_WB_PROJ,
+        output_type = "--output-exe",
+        trim_mode = "safe",
+        quiet = true,
+    )
+    JuliaC.compile_products(img)
+    link = JuliaC.LinkRecipe(image_recipe=img, outname=exeout)
+    JuliaC.link_products(link)
+    bun = JuliaC.BundleRecipe(link_recipe=link, output_dir=outdir)
+    JuliaC.bundle_products(bun)
+
+    actual_exe = Sys.iswindows() ? joinpath(outdir, "bin", basename(exeout) * ".exe") : joinpath(outdir, "bin", basename(exeout))
+    @test isfile(actual_exe)
+
+    # On builds where image objects load unmarked and root-unreachable
+    # (pre-julia#61474), this crashes deterministically on the first
+    # iteration instead of printing "survived".
+    @test readchomp(`$actual_exe`) == "survived"
 end
