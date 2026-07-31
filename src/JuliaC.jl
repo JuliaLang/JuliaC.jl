@@ -4,6 +4,7 @@ using Pkg
 using TOML
 using PackageCompiler
 using LazyArtifacts
+using Libdl
 using RelocatableFolders
 using Preferences
 
@@ -68,6 +69,7 @@ end
 
 include("compiling.jl")
 include("linking.jl")
+include("runtime_libraries.jl")
 include("bundling.jl")
 include("patchversion.jl")
 include("privatize_common.jl")
