@@ -38,10 +38,6 @@ function _start_spinner(message::String; io::IO=stderr)
 end
 
 
-# Return `true` if the access permissions for the given directory permitted writing.
-# Replace with `Base.iswritable(dir)` once Julia 1.10 support is dropped (added in 1.11).
-iswritable(dir::AbstractString) = ccall(:jl_fs_access, Cint, (Cstring, Cint), dir, 0x02) == 0
-
 # A throwaway environment that carries HostCPUFeatures' `freeze_cpu_target` build
 # preference. Placed on the load path so the preference applies as a default
 # without writing into the user's project.
@@ -115,19 +111,21 @@ function compile_products(recipe::ImageRecipe)
 
     project_arg = recipe.project == "" ? Base.active_project() : recipe.project
 
-    # The following avoids writing into the project directory while keeping the
-    # build reproducible without copying anything.
-    # `project_arg` may be a Project.toml path (from Base.active_project()) or a directory.
+    # `project_arg` is either a project file path (from `Base.active_project()`)
+    # or a directory. Normalize to the directory and locate the project file in
+    # it, which is `JuliaProject.toml` when one exists and `Project.toml` otherwise.
     project_dir = abspath(isdir(project_arg) ? project_arg : dirname(project_arg))
     pf = Base.env_project_file(project_dir)
     project_file = pf isa String ? pf : joinpath(project_dir, "Project.toml")
 
-    # A build needs a resolved manifest. Without one, it has to be written, which
-    # requires a writable project. Resolve in place when possible; refuse on
-    # read-only sources rather than resolving into a throwaway, non-reproducible manifest.
-    if Base.project_file_manifest_path(project_file) === nothing && !iswritable(project_dir)
-        error("No Manifest.toml for \"$project_dir\" and the directory is read-only. " *
-              "Run `Pkg.instantiate` or make it writable.")
+    # An explicit environment needs a resolved manifest, because Julia refuses to
+    # load a package from an environment that has none. Writing that manifest
+    # requires a writable project directory.
+    if Base.project_file_manifest_path(project_file) === nothing
+        iswritable(project_dir) ||
+            error("The project at \"$project_dir\" has no manifest and the directory is " *
+                  "not writable, so none can be created. Resolve it where it is writable " *
+                  "(`Pkg.resolve()`), or select an environment that has a manifest.")
     end
 
     # Give the subprocess a hermetic load path so a leaked parent JULIA_LOAD_PATH
@@ -143,6 +141,9 @@ function compile_products(recipe::ImageRecipe)
         env_overrides["JULIA_LOAD_PATH"] = (Sys.iswindows() ? ";" : ":") * overlay
     end
 
+    # The app project is instantiated where it lives. Its own manifest then
+    # pins the versions the image is built from, so the build is reproducible
+    # and repeated builds reuse the same precompile caches.
     inst_cmd = addenv(`$(Base.julia_cmd(cpu_target=precompile_cpu_target)) --project=$project_dir -e "using Pkg; Pkg.instantiate(); Pkg.precompile()"`, env_overrides...)
     recipe.verbose && println("Running: $inst_cmd")
     precompile_time = time_ns()

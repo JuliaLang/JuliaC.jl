@@ -657,3 +657,24 @@ end
     @test read(root_manifest, String) == manifest_before
 end
 
+@testset "Read-only project without a manifest is rejected" begin
+    # Julia cannot load an explicit environment that has no manifest, and a
+    # read-only directory cannot receive one, so the build stops with a
+    # diagnostic instead of resolving into a throwaway environment.
+    # Directory permissions cannot be checked into git, so the fixture is made here.
+    proj = joinpath(mktempdir(), "ReadOnlyApp")
+    Pkg.generate(proj; io = devnull)
+    chmod(proj, 0o500)
+    try
+        img = JuliaC.ImageRecipe(
+            file = proj,
+            output_type = "--output-exe",
+            quiet = true,
+        )
+        # Windows, `root` and some container filesystems keep the directory
+        # writable regardless of its mode, which leaves nothing to test.
+        iswritable(proj) || @test_throws "not writable" JuliaC.compile_products(img)
+    finally
+        chmod(proj, 0o700)
+    end
+end
