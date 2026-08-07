@@ -8,6 +8,14 @@ end
 
 (f::Base.RedirectStdStream)(io::Core.CoreSTDOUT) = Base._redirect_io_global(io, f.unix_fd)
 
+# Stub the ^C listener task out of trimmed binaries, on Julia versions
+# where SIGINT is delivered through the cancellation system (the listener
+# performs the Julia-side delivery; a trimmed binary has no interactive
+# episode to deliver to).
+if isdefined(Base, :start_sigint_listener)
+    @eval Base start_sigint_listener() = nothing
+end
+
 @eval Base begin
     show(io::IO, ::Colon) = print(io, "Colon()")
     depwarn(msg, funcsym; force::Bool=false) = nothing
