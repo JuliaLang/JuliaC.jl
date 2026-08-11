@@ -32,7 +32,7 @@ end
 #   --link-native <specs>        : Comma-separated `Pkg_jll` / `Pkg_jll.product` specs
 #                                  whose libraries are bound via direct external
 #                                  symbols at link time, resolved through each
-#                                  package's JuliaLibrary.toml record.
+#                                  package's JLL.toml record.
 #   --link-inputs <path>         : Where to write the link-inputs manifest consumed
 #                                  by the driver's link step (required with --link-native).
 #   --export-foreign-deps <path> : Write a JSON manifest of every ccall/cglobal site.

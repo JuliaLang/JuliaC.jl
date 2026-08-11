@@ -205,7 +205,7 @@ function compile_products(recipe::ImageRecipe)
     end
     if !isempty(recipe.link_native_libs) || recipe.link_native_blas !== nothing
         # The buildscript resolves these package specs through their
-        # JuliaLibrary.toml records and registers the resolved dlids with the
+        # JLL.toml records and registers the resolved dlids with the
         # runtime before any user code (and therefore any ccall lowering)
         # runs; the AOT stub-emission pass consults that table to decide
         # which ccalls to bind natively. The resolved libraries are written

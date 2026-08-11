@@ -2,9 +2,16 @@
 #
 # Resolution pass for `--link-native`: turn package-level specs
 # (`Pkg_jll` or `Pkg_jll.product`) into a concrete set of libraries by
-# consuming each package's `JuliaLibrary.toml` record, register every
-# resolved library's dlid with the runtime's native-link policy table, and
-# write a link-inputs manifest for the driver's link step.
+# consuming each package's `JLL.toml` record, register every resolved
+# library's dlid with the runtime's native-link policy table, and write a
+# link-inputs manifest for the driver's link step.
+#
+# The record format (jll_format 2.0) is shared with BinaryBuilder2-generated
+# JLLs; hand-written stdlib records are partial instances of the same
+# schema. Product identity (dlid) lives in a top-level name-keyed
+# [products] table; each [[builds]] block completely describes one
+# platform's shipped product set, with realization groups (`dynamic`,
+# `static`) per product and an explicit `location`.
 #
 # This runs before any user code (and therefore before any ccall lowering),
 # in the target process, so record resolution sees the target project's
@@ -43,36 +50,63 @@ end
 function load_record(pkgname::AbstractString, record_cache::Dict{String,Any})
     get!(record_cache, String(pkgname)) do
         pkgdir = locate_pkgdir(pkgname)
-        record_path = joinpath(pkgdir, "JuliaLibrary.toml")
+        record_path = joinpath(pkgdir, "JLL.toml")
         isfile(record_path) ||
-            error("--link-native: $pkgname has no JuliaLibrary.toml record; " *
+            error("--link-native: $pkgname has no JLL.toml record; " *
                   "only packages that ship one can be natively linked")
         record = Base.parsed_toml(record_path)
-        fmt = get(record, "library_format", nothing)
-        fmt isa Real && 1.0 <= fmt < 2.0 ||
-            error("--link-native: $record_path has unsupported library_format $(repr(fmt))")
+        fmt = get(record, "jll_format", nothing)
+        ver = fmt isa AbstractString ? tryparse(VersionNumber, fmt) : nothing
+        ver isa VersionNumber && ver.major == 2 ||
+            error("--link-native: $record_path has unsupported jll_format $(repr(fmt))")
         haskey(record, "products") ||
-            error("--link-native: $record_path declares no products")
+            error("--link-native: $record_path declares no product identities")
+        haskey(record, "builds") ||
+            error("--link-native: $record_path declares no builds")
         return record
     end
 end
 
-# Select the variant of `product` matching the host platform, Artifacts.toml
-# style: String-valued keys are platform tags, most specific match wins.
-function select_variant(product::Dict{String,Any}, host::AbstractPlatform)
-    variants = get(product, "variants", Any[])
+# Keys of a [[builds]] block that are data rather than platform-selector
+# tags in the hand-written (tag-key) spelling.
+const BUILD_DATA_KEYS = ("location", "platform", "platforms", "name", "src_version", "lazy")
+
+# Select the [[builds]] block matching the host platform. A generated build
+# carries a concrete `platform` triplet; a hand-written build carries either
+# a `platforms` triplet list (identical build for several platforms) or
+# Artifacts.toml-style tag keys (`os`, `arch`, ...), where String-valued
+# keys are platform tags, most specific match wins, and a build with no
+# selector at all is a wildcard fallback.
+function select_build(record::Dict{String,Any}, host::AbstractPlatform)
     dict = Dict{Platform,Any}()
-    for v in variants
-        haskey(v, "os") || error("--link-native: record variant missing an `os` key")
-        tags = Dict{Symbol,String}()
-        for (k, val) in v
-            (val isa String && k != "dlname" && k != "path" && k != "os" && k != "arch") || continue
-            tags[Symbol(k)] = val
+    wildcard = nothing
+    for b in record["builds"]
+        if haskey(b, "platform")
+            dict[parse(Platform, b["platform"]::String)] = b
+        elseif haskey(b, "platforms")
+            for t in b["platforms"]
+                dict[parse(Platform, t::String)] = b
+            end
+        elseif haskey(b, "os")
+            tags = Dict{Symbol,String}()
+            for (k, val) in b
+                (val isa String && !(k in BUILD_DATA_KEYS) && k != "os" && k != "arch") || continue
+                tags[Symbol(k)] = val
+            end
+            p = Platform(get(b, "arch", arch(host)), b["os"]; tags...)
+            dict[p] = b
+        else
+            for (k, val) in b
+                (val isa String && !(k in BUILD_DATA_KEYS)) &&
+                    error("--link-native: record build has selector `$k` but no `os` key")
+            end
+            wildcard === nothing ||
+                error("--link-native: record declares multiple selector-less builds")
+            wildcard = b
         end
-        p = Platform(get(v, "arch", arch(host)), v["os"]; tags...)
-        dict[p] = v
     end
-    return select_platform(dict, host)
+    build = select_platform(dict, host)
+    return build === nothing ? wildcard : build
 end
 
 # The private shared-library directory of this Julia installation, where
@@ -85,49 +119,64 @@ end
 function resolve_library(spec::String, pkgname::String, prodname::String,
                          record::Dict{String,Any}, host::AbstractPlatform;
                          static::Bool = false)
-    product = get(record["products"], prodname, nothing)
-    product === nothing &&
+    identity = get(record["products"], prodname, nothing)
+    identity === nothing &&
         error("--link-native: $pkgname's record declares no product `$prodname`")
-    dlid = get(product, "dlid", nothing)
+    dlid = get(identity, "dlid", nothing)
     dlid isa String ||
         error("--link-native: $pkgname.$prodname declares no dlid")
-    variant = select_variant(product, host)
-    variant === nothing &&
-        error("--link-native: $pkgname.$prodname is not available for this platform")
-    dlname = get(variant, "dlname", nothing)
-    dlname isa String ||
-        error("--link-native: $pkgname.$prodname's selected variant declares no dlname")
-    location = get(product, "location", nothing)
+    build = select_build(record, host)
+    build === nothing &&
+        error("--link-native: $pkgname's record has no build for this platform")
+    location = get(build, "location", nothing)
     location in ("bundled", "artifact") ||
-        error("--link-native: $pkgname.$prodname has unsupported location $(repr(location))")
+        error("--link-native: $pkgname's record build has unsupported location $(repr(location))")
     location == "artifact" &&
-        error("--link-native: $pkgname.$prodname is artifact-backed, which is not yet supported")
+        error("--link-native: $pkgname is artifact-located, which is not yet supported")
+    product = get(get(build, "products", Dict{String,Any}()), prodname, nothing)
+    product === nothing &&
+        error("--link-native: $pkgname.$prodname is not available for this platform")
+    dyngroup = get(product, "dynamic", nothing)
+    stgroup = get(product, "static", nothing)
     if static
-        # Static realization: link the archive declared by the record's
-        # static sub-table. Its dependency edges and system-library closure
-        # come from the record, because archives carry no DT_NEEDED.
-        st = get(product, "static", nothing)
-        st isa Dict ||
-            error("--link-native: $pkgname.$prodname declares no static realization")
-        relpath = get(st, "path", nothing)
+        # Static realization: link the archive declared by the group. Its
+        # dependency edges and system-library closure come from the record,
+        # because archives carry no DT_NEEDED equivalent.
+        stgroup isa Dict ||
+            error("--link-native: $pkgname.$prodname has no static realization for this platform")
+        relpath = get(stgroup, "path", nothing)
         relpath isa String ||
-            error("--link-native: $pkgname.$prodname's static sub-table declares no path")
+            error("--link-native: $pkgname.$prodname's static group declares no path")
         path = joinpath(bundled_shlibdir(), relpath)
         isfile(path) ||
             error("--link-native: $pkgname.$prodname's static archive $path does not exist")
-        deps = Vector{String}(get(st, "deps", String[]))
-        system_deps = Vector{String}(get(st, "system_deps", String[]))
+        deps = Vector{String}(get(stgroup, "deps", String[]))
+        system_deps = Vector{String}(get(stgroup, "system_deps", String[]))
+        # The dynamic realization's soname still names the shipped shared
+        # file (bundle filtering, shim configuration); a static-only product
+        # has none, so fall back to the archive name.
+        dlname = dyngroup isa Dict ?
+            something(get(dyngroup, "soname", nothing), basename(relpath)) : basename(relpath)
         lib = ResolvedLibrary(spec, pkgname, prodname, dlid, dlname, path, "static", system_deps)
         return lib, deps
     else
-        # Definitionally the file named `dlname` in the private shlibdir of
-        # the installation that owns the record (the same file the package's
-        # lazy loading path opens).
-        path = joinpath(bundled_shlibdir(), dlname)
+        if !(dyngroup isa Dict)
+            stgroup isa Dict &&
+                error("--link-native: $pkgname.$prodname has only a static realization " *
+                      "for this platform; request it as `static:$pkgname.$prodname`")
+            error("--link-native: $pkgname.$prodname has no dynamic realization for this platform")
+        end
+        soname = get(dyngroup, "soname", nothing)
+        soname isa String ||
+            error("--link-native: $pkgname.$prodname's dynamic group declares no soname")
+        # The locator defaults to the soname: the file so named in the
+        # private shlibdir of the installation that owns the record (the
+        # same file the package's lazy loading path opens).
+        path = joinpath(bundled_shlibdir(), get(dyngroup, "path", soname))
         isfile(path) ||
             error("--link-native: $pkgname.$prodname resolved to $path, which does not exist")
-        lib = ResolvedLibrary(spec, pkgname, prodname, dlid, dlname, path, "dynamic", String[])
-        return lib, Vector{String}(get(variant, "deps", String[]))
+        lib = ResolvedLibrary(spec, pkgname, prodname, dlid, soname, path, "dynamic", String[])
+        return lib, Vector{String}(get(dyngroup, "deps", String[]))
     end
 end
 
@@ -173,13 +222,22 @@ function resolve_and_register!(specs::Vector{String}, link_inputs_path::String;
         return String(bare), static
     end
 
+    # Expanding a whole-package spec means every product of the build
+    # selected for this platform (the identity table may list products a
+    # given platform does not ship).
+    function platform_products(record)
+        build = select_build(record, host)
+        build === nothing && return String[]
+        return collect(String, keys(get(build, "products", Dict{String,Any}())))
+    end
+
     substituted = ResolvedLibrary[]
     if blas_provider !== nothing
         # Register the trampoline's identities so its call sites are bound
         # natively, but do not link it: its computational symbols resolve
         # directly into the provider, and its control API into the shim.
         record = load_record(BLAS_TRAMPOLINE_PACKAGE, record_cache)
-        for prodname in keys(record["products"])
+        for prodname in platform_products(record)
             lib, _ = resolve_library("<blas trampoline>", BLAS_TRAMPOLINE_PACKAGE,
                                      String(prodname), record, host)
             push!(substituted, ResolvedLibrary(lib.spec, lib.package, lib.product,
@@ -208,8 +266,8 @@ function resolve_and_register!(specs::Vector{String}, link_inputs_path::String;
         record = load_record(pkgname, record_cache)
         if isempty(prodname)
             # expand to every product of the package
-            for pn in keys(record["products"])
-                push!(queue, (spec, pkgname, String(pn), static))
+            for pn in platform_products(record)
+                push!(queue, (spec, pkgname, pn, static))
             end
             continue
         end

@@ -10,7 +10,7 @@
 // the statically-known configuration.
 //
 // Configuration is injected at compile time by the juliac driver, from the
-// provider's JuliaLibrary.toml record:
+// provider's JLL.toml record:
 //   -DLBT_SHIM_LIBNAME="libopenblas64_.so"   the provider's dlname
 //   -DLBT_SHIM_SUFFIX="64_"                  the provider's symbol suffix
 //   -DLBT_SHIM_ILP64=1                       ILP64 (64) vs LP64 (32) interface

@@ -38,7 +38,7 @@ Base.@kwdef mutable struct ImageRecipe
     # instead of through Julia's lazy ccall stubs. Entries are package-level
     # specs (`Zstd_jll` for every library product of the package, or
     # `Zstd_jll.libzstd` for one product), resolved through the package's
-    # `JuliaLibrary.toml` record; the resolved set is closed over the
+    # `JLL.toml` record; the resolved set is closed over the
     # records' dependency edges.
     link_native_libs::Vector{String} = String[]
     # BLAS provider package spec for `--link-native-blas`: binds every
@@ -97,7 +97,8 @@ export compile_products, link_products, bundle_products
 
 # Normalize the linkage-mode prefix of a `--link-native` spec: `dynamic:`
 # (the default) strips to the bare spec; `static:` is preserved for the
-# resolution pass, which reads the record's static sub-table for such specs.
+# resolution pass, which selects the record's static realization for such
+# specs.
 function _strip_linkage_mode(spec::String)
     if startswith(spec, "dynamic:")
         return String(chopprefix(spec, "dynamic:"))
@@ -133,10 +134,10 @@ function _print_usage(io::IO=stdout)
     println(io, "  --link-native <specs>       Comma-separated `Pkg_jll` or `Pkg_jll.product` specs whose")
     println(io, "                              libraries are bound via direct external symbols at link")
     println(io, "                              time instead of Julia's lazy ccall stubs. Resolved through")
-    println(io, "                              each package's JuliaLibrary.toml record, closed over the")
+    println(io, "                              each package's JLL.toml record, closed over the")
     println(io, "                              records' dependency edges. A spec may carry a linkage-mode")
-    println(io, "                              prefix: `dynamic:` (the default) or `static:` (reserved;")
-    println(io, "                              not yet supported).")
+    println(io, "                              prefix: `dynamic:` (the default) or `static:` (link the")
+    println(io, "                              record's static realization).")
     println(io, "  --link-native-blas <spec>   Bind every libblastrampoline ccall site natively and")
     println(io, "                              satisfy it with this BLAS provider (e.g. `OpenBLAS_jll`)")
     println(io, "                              plus JuliaC's LBT control-API shim, removing the")
