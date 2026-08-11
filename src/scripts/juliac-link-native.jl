@@ -21,6 +21,7 @@
 module JuliaCLinkNative
 
 using Base.BinaryPlatforms: AbstractPlatform, HostPlatform, Platform, select_platform, arch
+import Artifacts
 
 struct ResolvedLibrary
     spec::String        # the request that pulled this in (or "<dep of X>")
@@ -71,13 +72,44 @@ end
 # tags in the hand-written (tag-key) spelling.
 const BUILD_DATA_KEYS = ("location", "platform", "platforms", "name", "src_version", "lazy")
 
-# Select the [[builds]] block matching the host platform. A generated build
-# carries a concrete `platform` triplet; a hand-written build carries either
-# a `platforms` triplet list (identical build for several platforms) or
+# The SHA1 tree hash of a build's artifact binding, or `nothing`.
+function build_artifact_hash(b)
+    binding = get(b, "artifact", nothing)
+    binding isa Dict || return nothing
+    th = get(binding, "treehash", nothing)
+    th isa String || return nothing
+    return Base.SHA1(chopprefix(th, "sha1:"))
+end
+
+# Select the [[builds]] block describing this host's libraries.
+#
+# Artifact-located builds resolve by *identity*: the installed artifact
+# decides which build describes what is on disk — the platform-augmentation
+# hooks already ran when that artifact was chosen, so no platform matching
+# is repeated here. Bundled builds (and disambiguation between several
+# installed artifacts) match by platform: a generated build carries a
+# concrete `platform` triplet; a hand-written build carries either a
+# `platforms` triplet list (identical build for several platforms) or
 # Artifacts.toml-style tag keys (`os`, `arch`, ...), where String-valued
 # keys are platform tags, most specific match wins, and a build with no
 # selector at all is a wildcard fallback.
 function select_build(record::Dict{String,Any}, host::AbstractPlatform)
+    installed = Any[]
+    for b in record["builds"]
+        get(b, "location", nothing) == "artifact" || continue
+        hash = build_artifact_hash(b)
+        hash === nothing && continue
+        Artifacts.artifact_exists(hash) && push!(installed, b)
+    end
+    length(installed) == 1 && return installed[1]
+    if length(installed) > 1
+        dict = Dict{Platform,Any}()
+        for b in installed
+            haskey(b, "platform") && (dict[parse(Platform, b["platform"]::String)] = b)
+        end
+        b = select_platform(dict, host)
+        b !== nothing && return b
+    end
     dict = Dict{Platform,Any}()
     wildcard = nothing
     for b in record["builds"]
@@ -131,8 +163,19 @@ function resolve_library(spec::String, pkgname::String, prodname::String,
     location = get(build, "location", nothing)
     location in ("bundled", "artifact") ||
         error("--link-native: $pkgname's record build has unsupported location $(repr(location))")
-    location == "artifact" &&
-        error("--link-native: $pkgname is artifact-located, which is not yet supported")
+    if location == "artifact"
+        hash = build_artifact_hash(build)
+        hash === nothing &&
+            error("--link-native: $pkgname's artifact-located build has no artifact binding")
+        Artifacts.artifact_exists(hash) ||
+            error("--link-native: $pkgname's artifact $(hash) is not installed " *
+                  "(is the project instantiated?)")
+        base = Artifacts.artifact_path(hash)
+    else
+        # Bundled: paths resolve against the private shlibdir of the Julia
+        # installation that owns the record.
+        base = bundled_shlibdir()
+    end
     product = get(get(build, "products", Dict{String,Any}()), prodname, nothing)
     product === nothing &&
         error("--link-native: $pkgname.$prodname is not available for this platform")
@@ -147,7 +190,7 @@ function resolve_library(spec::String, pkgname::String, prodname::String,
         relpath = get(stgroup, "path", nothing)
         relpath isa String ||
             error("--link-native: $pkgname.$prodname's static group declares no path")
-        path = joinpath(bundled_shlibdir(), relpath)
+        path = joinpath(base, relpath)
         isfile(path) ||
             error("--link-native: $pkgname.$prodname's static archive $path does not exist")
         deps = Vector{String}(get(stgroup, "deps", String[]))
@@ -172,7 +215,7 @@ function resolve_library(spec::String, pkgname::String, prodname::String,
         # The locator defaults to the soname: the file so named in the
         # private shlibdir of the installation that owns the record (the
         # same file the package's lazy loading path opens).
-        path = joinpath(bundled_shlibdir(), get(dyngroup, "path", soname))
+        path = joinpath(base, get(dyngroup, "path", soname))
         isfile(path) ||
             error("--link-native: $pkgname.$prodname resolved to $path, which does not exist")
         lib = ResolvedLibrary(spec, pkgname, prodname, dlid, soname, path, "dynamic", String[])
