@@ -10,7 +10,7 @@
 # JLLs; hand-written stdlib records are partial instances of the same
 # schema. Product identity (dlid) lives in a top-level name-keyed
 # [products] table; each [[builds]] block completely describes one
-# platform's shipped product set, with realization groups (`dynamic`,
+# platform's shipped product set, with per-linkage tables (`dynamic`,
 # `static`) per product and an explicit `location`.
 #
 # This runs before any user code (and therefore before any ccall lowering),
@@ -28,12 +28,13 @@ struct ResolvedLibrary
     package::String
     product::String
     dlid::String
-    dlname::String      # the dynamic realization's soname (identification / bundle filtering)
+    dlname::String      # the dynamic library's soname (identification / bundle filtering)
     # Absolute path of the file to link, or `nothing` for a library whose
     # sites are bound natively but whose symbols are satisfied by other link
     # inputs (e.g. libblastrampoline under --link-native-blas).
     path::Union{String, Nothing}
     linkage::String     # "static" or "dynamic"
+    location::String    # "bundled" or "artifact" (where the library file lives)
     system_deps::Vector{String}
 end
 
@@ -182,11 +183,11 @@ function resolve_library(spec::String, pkgname::String, prodname::String,
     dyngroup = get(product, "dynamic", nothing)
     stgroup = get(product, "static", nothing)
     if static
-        # Static realization: link the archive declared by the group. Its
+        # Static linkage: link the archive declared by the `static` table. Its
         # dependency edges and system-library closure come from the record,
         # because archives carry no DT_NEEDED equivalent.
         stgroup isa Dict ||
-            error("--link-native: $pkgname.$prodname has no static realization for this platform")
+            error("--link-native: $pkgname.$prodname has no static library for this platform")
         relpath = get(stgroup, "path", nothing)
         relpath isa String ||
             error("--link-native: $pkgname.$prodname's static group declares no path")
@@ -195,19 +196,19 @@ function resolve_library(spec::String, pkgname::String, prodname::String,
             error("--link-native: $pkgname.$prodname's static archive $path does not exist")
         deps = Vector{String}(get(stgroup, "deps", String[]))
         system_deps = Vector{String}(get(stgroup, "system_deps", String[]))
-        # The dynamic realization's soname still names the shipped shared
+        # The dynamic library's soname still names the shipped shared
         # file (bundle filtering, shim configuration); a static-only product
         # has none, so fall back to the archive name.
         dlname = dyngroup isa Dict ?
             something(get(dyngroup, "soname", nothing), basename(relpath)) : basename(relpath)
-        lib = ResolvedLibrary(spec, pkgname, prodname, dlid, dlname, path, "static", system_deps)
+        lib = ResolvedLibrary(spec, pkgname, prodname, dlid, dlname, path, "static", location, system_deps)
         return lib, deps
     else
         if !(dyngroup isa Dict)
             stgroup isa Dict &&
-                error("--link-native: $pkgname.$prodname has only a static realization " *
+                error("--link-native: $pkgname.$prodname has only a static library " *
                       "for this platform; request it as `static:$pkgname.$prodname`")
-            error("--link-native: $pkgname.$prodname has no dynamic realization for this platform")
+            error("--link-native: $pkgname.$prodname has no dynamic library for this platform")
         end
         soname = get(dyngroup, "soname", nothing)
         soname isa String ||
@@ -218,7 +219,7 @@ function resolve_library(spec::String, pkgname::String, prodname::String,
         path = joinpath(base, get(dyngroup, "path", soname))
         isfile(path) ||
             error("--link-native: $pkgname.$prodname resolved to $path, which does not exist")
-        lib = ResolvedLibrary(spec, pkgname, prodname, dlid, soname, path, "dynamic", String[])
+        lib = ResolvedLibrary(spec, pkgname, prodname, dlid, soname, path, "dynamic", location, String[])
         return lib, Vector{String}(get(dyngroup, "deps", String[]))
     end
 end
@@ -257,7 +258,7 @@ function resolve_and_register!(specs::Vector{String}, link_inputs_path::String;
     queue = Tuple{String,String,String,Bool}[]
 
     # A spec may carry a linkage-mode prefix: `static:` selects the record's
-    # static realization for the named products (their dependency edges are
+    # static library for the named products (their dependency edges are
     # provisioned dynamically unless themselves requested static).
     function parse_mode(spec::AbstractString)
         static = startswith(spec, "static:")
@@ -285,7 +286,7 @@ function resolve_and_register!(specs::Vector{String}, link_inputs_path::String;
                                      String(prodname), record, host)
             push!(substituted, ResolvedLibrary(lib.spec, lib.package, lib.product,
                                                lib.dlid, lib.dlname, nothing,
-                                               "substituted", String[]))
+                                               "substituted", lib.location, String[]))
             push!(seen, (BLAS_TRAMPOLINE_PACKAGE, String(prodname)))
         end
         # The provider is an ordinary native-link request (with its closure).
@@ -352,6 +353,7 @@ function resolve_and_register!(specs::Vector{String}, link_inputs_path::String;
             println(io, "dlid = \"", esc(lib.dlid), "\"")
             println(io, "dlname = \"", esc(lib.dlname), "\"")
             println(io, "linkage = \"", esc(lib.linkage), "\"")
+            println(io, "location = \"", esc(lib.location), "\"")
             if lib.path !== nothing
                 println(io, "path = \"", esc(lib.path), "\"")
             end

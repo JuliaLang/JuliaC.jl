@@ -1,6 +1,6 @@
 """
 Remove bundled shared libraries that the executable no longer references:
-those whose static realization was linked into the binary (shipping the
+those whose static library was linked into the binary (shipping the
 `.so` would at best waste space and at worst load a second copy), and those
 whose call sites were substituted away entirely (e.g. libblastrampoline
 under --link-native-blas).
@@ -9,20 +9,121 @@ function _filter_statically_linked!(output_dir::String, image_recipe::ImageRecip
     inputs_path = image_recipe.link_inputs_path
     (inputs_path === nothing || !isfile(inputs_path)) && return
     inputs = TOML.parsefile(inputs_path)
+    # Sonames the executable resolves through the system loader at process
+    # start: hard runtime dependencies that no bundle filter may ever remove.
+    protected = Set{String}(String(lib["dlname"]) for lib in get(inputs, "libraries", Any[])
+                            if get(lib, "linkage", "") == "dynamic")
     for lib in get(inputs, "libraries", Any[])
         get(lib, "linkage", "") in ("static", "substituted") || continue
         dlname = lib["dlname"]
         # Strip the platform extension to a stem, and remove the soname, its
-        # symlink chain, and versioned realizations (e.g. libfoo.so,
+        # symlink chain, and versioned filenames (e.g. libfoo.so,
         # libfoo.so.2, libfoo.2.3.4.so).
         stem = replace(dlname, r"\.so(\.\d+)*$|\.\d+\.dylib$|\.dylib$|(-\d+)?\.dll$" => "")
         isempty(stem) && continue
         for (root, _, files) in walkdir(output_dir)
             for f in files
                 startswith(f, stem * ".") || f == stem * ".dll" || continue
+                f in protected && continue
                 rm(joinpath(root, f); force=true)
             end
         end
+    end
+    return
+end
+
+# Natively-linked *dynamic* libraries that live in artifacts are not
+# covered by the stdlib library bundling: flatten each into the bundle's
+# private library directory under its soname (the name the executable's
+# DT_NEEDED records), with an $ORIGIN rpath. The provision closure
+# guarantees every dependency of a natively-linked library is itself
+# natively provided and therefore co-located, so $ORIGIN suffices.
+function _bundle_native_artifact_libs!(recipe::BundleRecipe)
+    image_recipe = recipe.link_recipe.image_recipe
+    inputs_path = image_recipe.link_inputs_path
+    (inputs_path === nothing || !isfile(inputs_path)) && return
+    inputs = TOML.parsefile(inputs_path)
+    dest_dir = joinpath(recipe.output_dir, recipe.libdir, "julia")
+    for lib in get(inputs, "libraries", Any[])
+        get(lib, "linkage", "") == "dynamic" || continue
+        get(lib, "location", "") == "artifact" || continue
+        src = get(lib, "path", nothing)
+        src isa String && isfile(src) ||
+            error("--link-native: artifact library $(lib["dlname"]) vanished before bundling")
+        mkpath(dest_dir)
+        dest = joinpath(dest_dir, lib["dlname"])
+        cp(src, dest; force=true)
+        chmod(dest, 0o755)
+        if Sys.islinux()
+            origin_rpath = raw"$ORIGIN"
+            run(`$(Patchelf_jll.patchelf()) --set-rpath $(origin_rpath) $(dest)`)
+        end
+        # On Windows the loader searches next to the executable.
+        if Sys.iswindows()
+            cp(dest, joinpath(recipe.output_dir, recipe.libdir, lib["dlname"]); force=true)
+        end
+    end
+    return
+end
+
+# System libraries the dynamic loader provides on every supported system;
+# DT_NEEDED entries matching these prefixes need not ship in the bundle.
+const _SYSTEM_SONAME_PREFIXES = (
+    "ld-linux", "libc.so", "libm.so", "libdl.so", "libpthread.so",
+    "librt.so", "libutil.so", "libresolv.so", "libmvec.so",
+)
+
+"""
+Verify the bundle satisfies what the link line promised: every natively
+linked *dynamic* library resolves at process start, through the executable's
+rpath, from files actually present in the bundle. Lazy loading masks a
+broken library rpath (dependencies are dlopened explicitly, by absolute
+path, before use); native linking hands the whole DT_NEEDED chain to the
+system loader at exec, so presence and per-object closure are checked here
+rather than discovered as a launch failure on the deployment target.
+"""
+function _verify_native_link_bundle!(recipe::BundleRecipe)
+    image_recipe = recipe.link_recipe.image_recipe
+    inputs_path = image_recipe.link_inputs_path
+    (inputs_path === nothing || !isfile(inputs_path)) && return
+    inputs = TOML.parsefile(inputs_path)
+    libs = [lib for lib in get(inputs, "libraries", Any[])
+            if get(lib, "linkage", "") == "dynamic"]
+    isempty(libs) && return
+    # The directories the executable's bundle rpath covers.
+    roots = [joinpath(recipe.output_dir, recipe.libdir),
+             joinpath(recipe.output_dir, recipe.libdir, "julia")]
+    findlib(soname) = findfirst(r -> isfile(joinpath(r, soname)), roots)
+    missing_libs = String[]
+    bundled = Tuple{String,String}[]  # (soname, path in bundle)
+    for lib in libs
+        soname = String(lib["dlname"])
+        idx = findlib(soname)
+        if idx === nothing
+            push!(missing_libs, "$(lib["package"]).$(lib["product"]) ($soname)")
+        else
+            push!(bundled, (soname, joinpath(roots[idx], soname)))
+        end
+    end
+    isempty(missing_libs) ||
+        error("--link-native: bundle is missing natively-linked dynamic libraries " *
+              "required by the loader at process start: " * join(missing_libs, ", "))
+    # Per-object closure (ELF): each natively-linked library's own DT_NEEDED
+    # entries must resolve within the bundle or be system libraries.
+    if Sys.islinux()
+        unresolved = String[]
+        for (soname, path) in bundled
+            for needed in split(read(`$(Patchelf_jll.patchelf()) --print-needed $(path)`, String))
+                needed = String(needed)
+                findlib(needed) === nothing || continue
+                any(p -> startswith(needed, p), _SYSTEM_SONAME_PREFIXES) && continue
+                push!(unresolved, "$soname -> $needed")
+            end
+        end
+        isempty(unresolved) ||
+            error("--link-native: natively-linked libraries have dependencies that " *
+                  "resolve neither in the bundle nor as system libraries: " *
+                  join(unresolved, ", "))
     end
     return
 end
@@ -95,6 +196,10 @@ function bundle_products(recipe::BundleRecipe)
         dirs_to_remove = String[]
     end
 
+    # Natively-linked dynamic libraries sourced from artifacts must live on
+    # the executable's rpath like the stdlib libraries do.
+    _bundle_native_artifact_libs!(recipe)
+
     # Determine where to place the built product within the bundle
     outname = recipe.link_recipe.outname
     is_exe = recipe.link_recipe.image_recipe.output_type == "--output-exe"
@@ -124,6 +229,10 @@ function bundle_products(recipe::BundleRecipe)
     for dir in dirs_to_remove
         rm(dir; force=true, recursive=true)
     end
+
+    # The bundle must satisfy what the link line promised; check now that
+    # every mutation (filters, privatization, removals) has run.
+    _verify_native_link_bundle!(recipe)
 
     # Print the bundle size tables now that codegen libraries have been pruned
     # and any privatization applied, so the sizes reflect the final bundle.

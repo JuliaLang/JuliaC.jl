@@ -97,7 +97,7 @@ export compile_products, link_products, bundle_products
 
 # Normalize the linkage-mode prefix of a `--link-native` spec: `dynamic:`
 # (the default) strips to the bare spec; `static:` is preserved for the
-# resolution pass, which selects the record's static realization for such
+# resolution pass, which selects the record's static library for such
 # specs.
 function _strip_linkage_mode(spec::String)
     if startswith(spec, "dynamic:")
@@ -137,7 +137,7 @@ function _print_usage(io::IO=stdout)
     println(io, "                              each package's JLL.toml record, closed over the")
     println(io, "                              records' dependency edges. A spec may carry a linkage-mode")
     println(io, "                              prefix: `dynamic:` (the default) or `static:` (link the")
-    println(io, "                              record's static realization).")
+    println(io, "                              record's static library).")
     println(io, "  --link-native-blas <spec>   Bind every libblastrampoline ccall site natively and")
     println(io, "                              satisfy it with this BLAS provider (e.g. `OpenBLAS_jll`)")
     println(io, "                              plus JuliaC's LBT control-API shim, removing the")
