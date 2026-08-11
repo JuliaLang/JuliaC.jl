@@ -20,11 +20,13 @@ struct ResolvedLibrary
     package::String
     product::String
     dlid::String
-    dlname::String
+    dlname::String      # the dynamic realization's soname (identification / bundle filtering)
     # Absolute path of the file to link, or `nothing` for a library whose
     # sites are bound natively but whose symbols are satisfied by other link
     # inputs (e.g. libblastrampoline under --link-native-blas).
     path::Union{String, Nothing}
+    linkage::String     # "static" or "dynamic"
+    system_deps::Vector{String}
 end
 
 # Locate a package's source directory without loading the package.
@@ -81,7 +83,8 @@ function bundled_shlibdir()
 end
 
 function resolve_library(spec::String, pkgname::String, prodname::String,
-                         record::Dict{String,Any}, host::AbstractPlatform)
+                         record::Dict{String,Any}, host::AbstractPlatform;
+                         static::Bool = false)
     product = get(record["products"], prodname, nothing)
     product === nothing &&
         error("--link-native: $pkgname's record declares no product `$prodname`")
@@ -95,19 +98,37 @@ function resolve_library(spec::String, pkgname::String, prodname::String,
     dlname isa String ||
         error("--link-native: $pkgname.$prodname's selected variant declares no dlname")
     location = get(product, "location", nothing)
-    if location == "bundled"
+    location in ("bundled", "artifact") ||
+        error("--link-native: $pkgname.$prodname has unsupported location $(repr(location))")
+    location == "artifact" &&
+        error("--link-native: $pkgname.$prodname is artifact-backed, which is not yet supported")
+    if static
+        # Static realization: link the archive declared by the record's
+        # static sub-table. Its dependency edges and system-library closure
+        # come from the record, because archives carry no DT_NEEDED.
+        st = get(product, "static", nothing)
+        st isa Dict ||
+            error("--link-native: $pkgname.$prodname declares no static realization")
+        relpath = get(st, "path", nothing)
+        relpath isa String ||
+            error("--link-native: $pkgname.$prodname's static sub-table declares no path")
+        path = joinpath(bundled_shlibdir(), relpath)
+        isfile(path) ||
+            error("--link-native: $pkgname.$prodname's static archive $path does not exist")
+        deps = Vector{String}(get(st, "deps", String[]))
+        system_deps = Vector{String}(get(st, "system_deps", String[]))
+        lib = ResolvedLibrary(spec, pkgname, prodname, dlid, dlname, path, "static", system_deps)
+        return lib, deps
+    else
         # Definitionally the file named `dlname` in the private shlibdir of
         # the installation that owns the record (the same file the package's
         # lazy loading path opens).
         path = joinpath(bundled_shlibdir(), dlname)
-    elseif location == "artifact"
-        error("--link-native: $pkgname.$prodname is artifact-backed, which is not yet supported")
-    else
-        error("--link-native: $pkgname.$prodname has unsupported location $(repr(location))")
+        isfile(path) ||
+            error("--link-native: $pkgname.$prodname resolved to $path, which does not exist")
+        lib = ResolvedLibrary(spec, pkgname, prodname, dlid, dlname, path, "dynamic", String[])
+        return lib, Vector{String}(get(variant, "deps", String[]))
     end
-    isfile(path) ||
-        error("--link-native: $pkgname.$prodname resolved to $path, which does not exist")
-    return ResolvedLibrary(spec, pkgname, prodname, dlid, dlname, path), variant
 end
 
 # The package whose call sites `--link-native-blas` redirects: every
@@ -140,7 +161,17 @@ function resolve_and_register!(specs::Vector{String}, link_inputs_path::String;
     record_cache = Dict{String,Any}()
     resolved = ResolvedLibrary[]
     seen = Set{Tuple{String,String}}()  # (package, product)
-    queue = Tuple{String,String,String}[]  # (spec, package, product)
+    # (spec, package, product, static); empty product = every product
+    queue = Tuple{String,String,String,Bool}[]
+
+    # A spec may carry a linkage-mode prefix: `static:` selects the record's
+    # static realization for the named products (their dependency edges are
+    # provisioned dynamically unless themselves requested static).
+    function parse_mode(spec::AbstractString)
+        static = startswith(spec, "static:")
+        bare = static ? chopprefix(spec, "static:") : spec
+        return String(bare), static
+    end
 
     substituted = ResolvedLibrary[]
     if blas_provider !== nothing
@@ -152,53 +183,49 @@ function resolve_and_register!(specs::Vector{String}, link_inputs_path::String;
             lib, _ = resolve_library("<blas trampoline>", BLAS_TRAMPOLINE_PACKAGE,
                                      String(prodname), record, host)
             push!(substituted, ResolvedLibrary(lib.spec, lib.package, lib.product,
-                                               lib.dlid, lib.dlname, nothing))
+                                               lib.dlid, lib.dlname, nothing,
+                                               "substituted", String[]))
             push!(seen, (BLAS_TRAMPOLINE_PACKAGE, String(prodname)))
         end
         # The provider is an ordinary native-link request (with its closure).
-        push!(queue, (blas_provider, String(split(blas_provider, '.')[1]),
-                      length(split(blas_provider, '.')) == 2 ?
-                          String(split(blas_provider, '.')[2]) : ""))
+        bare, static = parse_mode(blas_provider)
+        parts = split(bare, '.')
+        push!(queue, (bare, String(parts[1]),
+                      length(parts) == 2 ? String(parts[2]) : "", static))
     end
 
     for spec in specs
-        parts = split(spec, '.')
+        bare, static = parse_mode(spec)
+        parts = split(bare, '.')
         length(parts) <= 2 ||
             error("--link-native: malformed spec `$spec` (expected `Pkg_jll` or `Pkg_jll.product`)")
-        pkgname = String(parts[1])
-        record = load_record(pkgname, record_cache)
-        if length(parts) == 2
-            push!(queue, (spec, pkgname, String(parts[2])))
-        else
-            for prodname in keys(record["products"])
-                push!(queue, (spec, pkgname, String(prodname)))
-            end
-        end
+        push!(queue, (bare, String(parts[1]),
+                      length(parts) == 2 ? String(parts[2]) : "", static))
     end
 
     while !isempty(queue)
-        (spec, pkgname, prodname) = popfirst!(queue)
+        (spec, pkgname, prodname, static) = popfirst!(queue)
+        record = load_record(pkgname, record_cache)
         if isempty(prodname)
             # expand to every product of the package
-            record = load_record(pkgname, record_cache)
             for pn in keys(record["products"])
-                push!(queue, (spec, pkgname, String(pn)))
+                push!(queue, (spec, pkgname, String(pn), static))
             end
             continue
         end
         (pkgname, prodname) in seen && continue
         push!(seen, (pkgname, prodname))
-        record = load_record(pkgname, record_cache)
-        lib, variant = resolve_library(spec, pkgname, prodname, record, host)
+        lib, deps = resolve_library(spec, pkgname, prodname, record, host; static)
         push!(resolved, lib)
         # Provision closure: everything a natively-provided library depends on
-        # must itself be natively provided (its dlopen never runs).
-        for dep in get(variant, "deps", String[])
+        # must itself be natively provided (its dlopen never runs). Dependency
+        # edges provision dynamically; staticness is chosen per requested node.
+        for dep in deps
             depparts = split(dep, '.')
             if length(depparts) == 1
-                push!(queue, ("<dep of $pkgname.$prodname>", pkgname, String(depparts[1])))
+                push!(queue, ("<dep of $pkgname.$prodname>", pkgname, String(depparts[1]), false))
             elseif length(depparts) == 2
-                push!(queue, ("<dep of $pkgname.$prodname>", String(depparts[1]), String(depparts[2])))
+                push!(queue, ("<dep of $pkgname.$prodname>", String(depparts[1]), String(depparts[2]), false))
             else
                 error("--link-native: malformed dep edge `$dep` in $pkgname's record")
             end
@@ -223,8 +250,12 @@ function resolve_and_register!(specs::Vector{String}, link_inputs_path::String;
             println(io, "product = \"", esc(lib.product), "\"")
             println(io, "dlid = \"", esc(lib.dlid), "\"")
             println(io, "dlname = \"", esc(lib.dlname), "\"")
+            println(io, "linkage = \"", esc(lib.linkage), "\"")
             if lib.path !== nothing
                 println(io, "path = \"", esc(lib.path), "\"")
+            end
+            if !isempty(lib.system_deps)
+                println(io, "system_deps = [", join(("\"" * esc(d) * "\"" for d in lib.system_deps), ", "), "]")
             end
             println(io)
         end

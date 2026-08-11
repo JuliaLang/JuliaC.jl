@@ -1,3 +1,32 @@
+"""
+Remove bundled shared libraries that the executable no longer references:
+those whose static realization was linked into the binary (shipping the
+`.so` would at best waste space and at worst load a second copy), and those
+whose call sites were substituted away entirely (e.g. libblastrampoline
+under --link-native-blas).
+"""
+function _filter_statically_linked!(output_dir::String, image_recipe::ImageRecipe)
+    inputs_path = image_recipe.link_inputs_path
+    (inputs_path === nothing || !isfile(inputs_path)) && return
+    inputs = TOML.parsefile(inputs_path)
+    for lib in get(inputs, "libraries", Any[])
+        get(lib, "linkage", "") in ("static", "substituted") || continue
+        dlname = lib["dlname"]
+        # Strip the platform extension to a stem, and remove the soname, its
+        # symlink chain, and versioned realizations (e.g. libfoo.so,
+        # libfoo.so.2, libfoo.2.3.4.so).
+        stem = replace(dlname, r"\.so(\.\d+)*$|\.\d+\.dylib$|\.dylib$|(-\d+)?\.dll$" => "")
+        isempty(stem) && continue
+        for (root, _, files) in walkdir(output_dir)
+            for f in files
+                startswith(f, stem * ".") || f == stem * ".dll" || continue
+                rm(joinpath(root, f); force=true)
+            end
+        end
+    end
+    return
+end
+
 function bundle_products(recipe::BundleRecipe)
     bundle_start = time_ns()
 
@@ -24,6 +53,7 @@ function bundle_products(recipe::BundleRecipe)
     stdlibs = unique(vcat(PackageCompiler.gather_stdlibs_project(ctx2),
                           intersect(PackageCompiler._STDLIBS, map(x->x.name, Base._sysimage_modules))))
     libs_info = PackageCompiler.bundle_julia_libraries(recipe.output_dir, stdlibs; quiet)
+    _filter_statically_linked!(recipe.output_dir, image_recipe)
     artifacts_info = PackageCompiler.bundle_artifacts(ctx2, recipe.output_dir;
             include_lazy_artifacts=recipe.bundle_lazy_artifacts, quiet) # Lazy artifacts
     PackageCompiler.bundle_cert(recipe.output_dir) # SSL certificates

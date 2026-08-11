@@ -312,15 +312,17 @@ configured for the resolved BLAS provider, and add it to the link objects.
 """
 function _compile_lbt_shim(recipe::ImageRecipe)
     inputs = TOML.parsefile(recipe.link_inputs_path)
+    # The resolution pass records bare specs; strip any linkage-mode prefix.
+    bare_spec = replace(recipe.link_native_blas, r"^(static|dynamic):" => "")
     provider = nothing
     for lib in get(inputs, "libraries", Any[])
-        if lib["spec"] == recipe.link_native_blas
+        if lib["spec"] == bare_spec
             provider = lib
             break
         end
     end
     provider === nothing &&
-        error("--link-native-blas: provider $(recipe.link_native_blas) was not resolved")
+        error("--link-native-blas: provider $(bare_spec) was not resolved")
     dlname = provider["dlname"]
     # Official Julia builds use the `64_`-suffixed ILP64 interface on 64-bit
     # platforms; the record's dlname carries that fact.

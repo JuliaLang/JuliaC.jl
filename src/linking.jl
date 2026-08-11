@@ -96,12 +96,40 @@ function native_link_args(recipe::LinkRecipe)
     (inputs_path === nothing || !isfile(inputs_path)) &&
         error("--link-native: link-inputs manifest not found (was compile_products run?)")
     inputs = TOML.parsefile(inputs_path)
-    args = String[]
+    static_paths = String[]
+    dynamic_paths = String[]
+    system_deps = String[]
     for lib in get(inputs, "libraries", Any[])
         # Entries without a path have their sites bound natively but their
         # symbols satisfied by other link inputs (e.g. libblastrampoline
         # under --link-native-blas).
-        haskey(lib, "path") && push!(args, lib["path"])
+        haskey(lib, "path") || continue
+        if get(lib, "linkage", "dynamic") == "static"
+            push!(static_paths, lib["path"])
+            append!(system_deps, get(lib, "system_deps", String[]))
+        else
+            push!(dynamic_paths, lib["path"])
+        end
+    end
+    # Archives first (their references resolve from inputs to their right),
+    # then shared libraries, then the archives' system-library closure.
+    args = String[]
+    append!(args, static_paths)
+    append!(args, dynamic_paths)
+    for dep in unique(system_deps)
+        push!(args, "-l" * dep)
+    end
+    if !isempty(static_paths) && Sys.islinux()
+        # Discard unreferenced sections of the statically-linked archives
+        # (they are built with -ffunction-sections; the executable retains
+        # only the demanded kernels and their dependency cones). Julia
+        # executables link with --export-dynamic, which would root every
+        # symbol and defeat section GC, so demote each archive's symbols to
+        # local visibility first.
+        for path in static_paths
+            push!(args, "-Wl,--exclude-libs," * basename(path))
+        end
+        push!(args, "-Wl,--gc-sections")
     end
     return args
 end

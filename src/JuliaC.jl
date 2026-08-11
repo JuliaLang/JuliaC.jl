@@ -95,13 +95,11 @@ export ImageRecipe, LinkRecipe, BundleRecipe
 export compile_products, link_products, bundle_products
 
 
-# Parse and strip the linkage-mode prefix of a `--link-native` spec.
-# `dynamic:` (the default) strips to the bare spec; `static:` is reserved
-# until static library products exist.
+# Normalize the linkage-mode prefix of a `--link-native` spec: `dynamic:`
+# (the default) strips to the bare spec; `static:` is preserved for the
+# resolution pass, which reads the record's static sub-table for such specs.
 function _strip_linkage_mode(spec::String)
-    if startswith(spec, "static:")
-        error("--link-native: static linking is not yet supported (spec `$spec`)")
-    elseif startswith(spec, "dynamic:")
+    if startswith(spec, "dynamic:")
         return String(chopprefix(spec, "dynamic:"))
     end
     return spec
