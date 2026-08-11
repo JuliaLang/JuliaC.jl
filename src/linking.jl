@@ -84,21 +84,21 @@ function get_compiler_cmd(; cplusplus::Bool=false)
     return compiler_cmd
 end
 
-# Map each `--link-native=<name>` to a linker argument. Two shapes:
-#   - SONAME-style names containing `.so` or ending in `.a` (e.g. `libopenblas64_.so`,
-#     produced by `Libdl.LazyLibrary`'s default `dlname`) → `-l:<name>`, which tells
-#     GNU ld to match the filename exactly.
-#   - Bare product names (e.g. `libbzip2`, produced by `JLLWrappers.JLLLibrary`)
-#     → `-l<name without leading "lib">`, the standard ld convention.
-# `-L` search paths are the user's responsibility (pass them via `ld_flags`).
-function native_link_args(link_native_libs::Vector{String})
+# Link inputs for `--link-native`: the resolution pass (juliac-link-native.jl,
+# run inside the compile process) resolves package specs to concrete library
+# files and records them in the link-inputs manifest. Libraries are passed to
+# the linker as plain file paths — linker-agnostic, and the file itself
+# supplies everything else (its SONAME becomes the DT_NEEDED entry; on macOS
+# its install_name is recorded).
+function native_link_args(recipe::LinkRecipe)
+    image_recipe = recipe.image_recipe
+    inputs_path = image_recipe.link_inputs_path
+    (inputs_path === nothing || !isfile(inputs_path)) &&
+        error("--link-native: link-inputs manifest not found (was compile_products run?)")
+    inputs = TOML.parsefile(inputs_path)
     args = String[]
-    for name in link_native_libs
-        if occursin(".so", name) || endswith(name, ".a")
-            push!(args, "-l:" * name)
-        else
-            push!(args, startswith(name, "lib") ? "-l" * name[4:end] : "-l" * name)
-        end
+    for lib in get(inputs, "libraries", Any[])
+        push!(args, lib["path"])
     end
     return args
 end
@@ -155,7 +155,7 @@ function link_products(recipe::LinkRecipe)
         cmd2 = `$cmd2 -Wl,$(Base.Linking.WHOLE_ARCHIVE) $(image_recipe.img_path) $(image_recipe.extra_objects) -Wl,$(Base.Linking.NO_WHOLE_ARCHIVE) $(julia_libs)`
         # Libraries bound via direct external symbols rather than lazy ccall stubs
         if !isempty(image_recipe.link_native_libs)
-            cmd2 = `$cmd2 $(native_link_args(image_recipe.link_native_libs))`
+            cmd2 = `$cmd2 $(native_link_args(recipe))`
         end
         if Sys.ARCH === :i686
             # On 32-bit x86, Julia's 64-bit atomics require libatomic

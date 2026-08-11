@@ -29,11 +29,15 @@ end
 #   --use-loaded-libs            : Enable Libdl.dlopen override to reuse existing loads.
 #   --scripts-dir <path>         : Directory containing build helper scripts.
 #   --export-abi <path>          : Emit JSON ABI spec
-#   --link-native <names>        : Comma-separated library names to bind via direct
-#                                  external symbols at link time.
+#   --link-native <specs>        : Comma-separated `Pkg_jll` / `Pkg_jll.product` specs
+#                                  whose libraries are bound via direct external
+#                                  symbols at link time, resolved through each
+#                                  package's JuliaLibrary.toml record.
+#   --link-inputs <path>         : Where to write the link-inputs manifest consumed
+#                                  by the driver's link step (required with --link-native).
 #   --export-foreign-deps <path> : Write a JSON manifest of every ccall/cglobal site.
 source_path, output_type, add_ccallables, use_loaded_libs, scripts_dir, export_abi,
-        link_native_libs, export_foreign_deps = let
+        link_native_libs, link_inputs_path, export_foreign_deps = let
     source_path = ""
     output_type = ""
     add_ccallables = false
@@ -41,6 +45,7 @@ source_path, output_type, add_ccallables, use_loaded_libs, scripts_dir, export_a
     scripts_dir = abspath(dirname(PROGRAM_FILE))
     export_abi = nothing
     link_native_libs = String[]
+    link_inputs_path = nothing
     export_foreign_deps = nothing
     it = Iterators.Stateful(ARGS)
     for arg in it
@@ -71,6 +76,11 @@ source_path, output_type, add_ccallables, use_loaded_libs, scripts_dir, export_a
             names = popfirst!(it)
             names === nothing && error("Missing value for --link-native")
             append!(link_native_libs, String(n) for n in split(names, ',', keepempty=false))
+        elseif startswith(arg, "--link-inputs=")
+            link_inputs_path = split(arg, "=", limit=2)[2]
+        elseif arg == "--link-inputs"
+            link_inputs_path = popfirst!(it)
+            link_inputs_path === nothing && error("Missing value for --link-inputs")
         elseif startswith(arg, "--export-foreign-deps=")
             export_foreign_deps = split(arg, "=", limit=2)[2]
         elseif arg == "--export-foreign-deps"
@@ -80,25 +90,26 @@ source_path, output_type, add_ccallables, use_loaded_libs, scripts_dir, export_a
     end
     source_path == "" && error("Missing required --source <path>")
     (source_path, output_type, add_ccallables, use_loaded_libs, scripts_dir, export_abi,
-     link_native_libs, export_foreign_deps)
+     link_native_libs, link_inputs_path, export_foreign_deps)
 end
 
 # Native-link policy / foreign-deps export. Both must be registered with the
 # runtime before any user code (and therefore any ccall lowering) runs.
-if !isempty(link_native_libs) || export_foreign_deps !== nothing
+if !isempty(link_native_libs)
+    link_inputs_path !== nothing ||
+        error("--link-native requires --link-inputs (passed automatically by the juliac driver)")
+    include(joinpath(scripts_dir, "juliac-link-native.jl"))
+    JuliaCLinkNative.resolve_and_register!(link_native_libs, String(link_inputs_path))
+end
+if export_foreign_deps !== nothing
     let handle = Base.Libc.Libdl.dlopen("libjulia-internal"; throw_error=false)
         if handle === nothing ||
-                Base.Libc.Libdl.dlsym(handle, :jl_add_native_link_lib; throw_error=false) === nothing
-            error("--link-native / --export-foreign-deps require a Julia runtime with " *
-                  "native-link support; this Julia ($(VERSION)) does not provide it.")
+                Base.Libc.Libdl.dlsym(handle, :jl_set_foreign_deps_export_path; throw_error=false) === nothing
+            error("--export-foreign-deps requires a Julia runtime with native-link support; " *
+                  "this Julia ($(VERSION)) does not provide it.")
         end
     end
-    for name in link_native_libs
-        ccall(:jl_add_native_link_lib, Cvoid, (Cstring,), name)
-    end
-    if export_foreign_deps !== nothing
-        ccall(:jl_set_foreign_deps_export_path, Cvoid, (Cstring,), export_foreign_deps)
-    end
+    ccall(:jl_set_foreign_deps_export_path, Cvoid, (Cstring,), export_foreign_deps)
 end
 
 # Load user code

@@ -204,10 +204,19 @@ function compile_products(recipe::ImageRecipe)
         cmd = `$cmd --export-abi $(recipe.export_abi)`
     end
     if !isempty(recipe.link_native_libs)
-        # The buildscript registers these with the runtime before any user code
-        # (and therefore any ccall lowering) runs; the AOT stub-emission pass
-        # consults that table to decide which ccalls to bind natively.
-        cmd = `$cmd --link-native $(join(recipe.link_native_libs, ','))`
+        # The buildscript resolves these package specs through their
+        # JuliaLibrary.toml records and registers the resolved dlids with the
+        # runtime before any user code (and therefore any ccall lowering)
+        # runs; the AOT stub-emission pass consults that table to decide
+        # which ccalls to bind natively. The resolved libraries are written
+        # to the link-inputs manifest for the link step, and a foreign-deps
+        # manifest is always requested so the driver can verify afterwards
+        # that every requested library was actually bound natively.
+        recipe.link_inputs_path = recipe.img_path * ".link-inputs.toml"
+        cmd = `$cmd --link-native $(join(recipe.link_native_libs, ',')) --link-inputs $(recipe.link_inputs_path)`
+        if recipe.export_foreign_deps === nothing
+            recipe.export_foreign_deps = recipe.img_path * ".foreign-deps.json"
+        end
     end
     if recipe.export_foreign_deps !== nothing
         cmd = `$cmd --export-foreign-deps $(abspath(recipe.export_foreign_deps))`
@@ -278,6 +287,50 @@ function compile_products(recipe::ImageRecipe)
     end
     obj = _compile_jl_options_shim(recipe.jl_options; verbose=recipe.verbose)
     push!(recipe.extra_objects, obj)
+    # Verify the native-link policy took effect: every library requested via
+    # --link-native must have all of its ccall/cglobal sites bound natively.
+    # A site left at lazy lookup here would silently fall back at runtime.
+    if !isempty(recipe.link_native_libs)
+        _verify_native_linkage(recipe)
+    end
+end
+
+"""
+Cross-check the foreign-deps manifest against the link-inputs manifest: every
+dlid the resolution pass registered must appear only with `native` linkage.
+The parse is deliberately minimal and coupled to the fixed formatting of the
+runtime's manifest emitter (`aot_export_foreign_deps`): groups are keyed by
+the frozen dlid, and each symbol line carries its linkage.
+"""
+function _verify_native_linkage(recipe::ImageRecipe)
+    inputs_path = recipe.link_inputs_path
+    manifest_path = recipe.export_foreign_deps
+    (inputs_path === nothing || !isfile(inputs_path)) &&
+        error("--link-native: buildscript did not produce the link-inputs manifest")
+    (manifest_path === nothing || !isfile(manifest_path)) &&
+        error("--link-native: no foreign-deps manifest was produced to verify against")
+    inputs = TOML.parsefile(inputs_path)
+    manifest = read(manifest_path, String)
+    failures = String[]
+    for lib in get(inputs, "libraries", Any[])
+        dlid = lib["dlid"]
+        # The group for this dlid, if any: from its key line to the next
+        # group key (4-space indented quoted key) or the end of the object.
+        m = findfirst("\"$(dlid)\":", manifest)
+        m === nothing && continue # no sites referenced this library
+        rest = manifest[last(m):end]
+        nextgroup = findfirst(r"\n    \"", rest)
+        group = nextgroup === nothing ? rest : rest[1:first(nextgroup)]
+        for sym in eachmatch(r"\{\"symbol\": (\"[^\"]*\"), [^}]*\"linkage\": \"lazy\"\}", group)
+            push!(failures, "$(lib["package"]).$(lib["product"]): $(sym.captures[1])")
+        end
+    end
+    if !isempty(failures)
+        error("--link-native: the following symbols were left at lazy lookup despite ",
+              "their library being requested for native linking:\n  ",
+              join(failures, "\n  "))
+    end
+    return nothing
 end
 
 const _SUPPORTED_JL_OPTIONS = Set([

@@ -34,9 +34,15 @@ Base.@kwdef mutable struct ImageRecipe
     extra_objects::Vector{String} = String[]
     export_abi::Union{String, Nothing} = nothing
     # Libraries to bind via direct external symbol references at link time
-    # instead of through Julia's lazy ccall stubs. Entries are
-    # `AbstractLibrary` `dlname()` values (e.g. `libzstd` for Zstd_jll).
+    # instead of through Julia's lazy ccall stubs. Entries are package-level
+    # specs (`Zstd_jll` for every library product of the package, or
+    # `Zstd_jll.libzstd` for one product), resolved through the package's
+    # `JuliaLibrary.toml` record; the resolved set is closed over the
+    # records' dependency edges.
     link_native_libs::Vector{String} = String[]
+    # Path of the link-inputs manifest written by the resolution pass and
+    # consumed by the link step. Set by compile_products.
+    link_inputs_path::Union{String, Nothing} = nothing
     # If set, write a JSON manifest of every ccall/cglobal usage site here.
     export_foreign_deps::Union{String, Nothing} = nothing
     # Julia CLI option overrides applied via jl_parse_opts in a constructor before jl_init.
@@ -108,10 +114,11 @@ function _print_usage(io::IO=stdout)
     println(io, "  --compile-ccallable         Export ccallable entrypoints")
     println(io, "  --jl-option <key=value>     Set a Julia option using CLI syntax (supported: handle-signals=[yes/no], threads=[N])")
     println(io, "  --export-abi <file>         Emit type / function information for the ABI (in JSON format)")
-    println(io, "  --link-native <names>       Comma-separated library names to bind via direct external")
-    println(io, "                              symbols at link time instead of Julia's lazy ccall stubs.")
-    println(io, "                              Names are `AbstractLibrary` `dlname()` values")
-    println(io, "                              (e.g. `libzstd` for Zstd_jll).")
+    println(io, "  --link-native <specs>       Comma-separated `Pkg_jll` or `Pkg_jll.product` specs whose")
+    println(io, "                              libraries are bound via direct external symbols at link")
+    println(io, "                              time instead of Julia's lazy ccall stubs. Resolved through")
+    println(io, "                              each package's JuliaLibrary.toml record, closed over the")
+    println(io, "                              records' dependency edges.")
     println(io, "  --export-foreign-deps <path> Write a JSON manifest of every ccall/cglobal usage site")
     println(io, "                              to <path>, covering both native-linked and lazy-stub sites.")
     println(io, "  --experimental              Forwarded to Julia (needed for --trim)")
@@ -178,7 +185,7 @@ function _parse_cli_args(args::Vector{String})
             if startswith(arg, "--link-native=")
                 names = split(arg, '='; limit=2)[2]
             else
-                i == length(args) && error("--link-native requires a comma-separated list of library names")
+                i == length(args) && error("--link-native requires a comma-separated list of package specs")
                 names = args[i+1]
                 i += 1
             end
