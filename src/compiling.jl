@@ -203,7 +203,7 @@ function compile_products(recipe::ImageRecipe)
     if recipe.export_abi !== nothing
         cmd = `$cmd --export-abi $(recipe.export_abi)`
     end
-    if !isempty(recipe.link_native_libs)
+    if !isempty(recipe.link_native_libs) || recipe.link_native_blas !== nothing
         # The buildscript resolves these package specs through their
         # JuliaLibrary.toml records and registers the resolved dlids with the
         # runtime before any user code (and therefore any ccall lowering)
@@ -213,7 +213,13 @@ function compile_products(recipe::ImageRecipe)
         # manifest is always requested so the driver can verify afterwards
         # that every requested library was actually bound natively.
         recipe.link_inputs_path = recipe.img_path * ".link-inputs.toml"
-        cmd = `$cmd --link-native $(join(recipe.link_native_libs, ',')) --link-inputs $(recipe.link_inputs_path)`
+        if !isempty(recipe.link_native_libs)
+            cmd = `$cmd --link-native $(join(recipe.link_native_libs, ','))`
+        end
+        if recipe.link_native_blas !== nothing
+            cmd = `$cmd --link-native-blas $(recipe.link_native_blas)`
+        end
+        cmd = `$cmd --link-inputs $(recipe.link_inputs_path)`
         if recipe.export_foreign_deps === nothing
             recipe.export_foreign_deps = recipe.img_path * ".foreign-deps.json"
         end
@@ -290,9 +296,50 @@ function compile_products(recipe::ImageRecipe)
     # Verify the native-link policy took effect: every library requested via
     # --link-native must have all of its ccall/cglobal sites bound natively.
     # A site left at lazy lookup here would silently fall back at runtime.
-    if !isempty(recipe.link_native_libs)
+    if !isempty(recipe.link_native_libs) || recipe.link_native_blas !== nothing
         _verify_native_linkage(recipe)
     end
+    # Compile the LBT control-API shim for --link-native-blas, configured
+    # from the resolved provider entry in the link-inputs manifest.
+    if recipe.link_native_blas !== nothing
+        _compile_lbt_shim(recipe)
+    end
+end
+
+"""
+Compile JuliaC's libblastrampoline control-API shim (see shims/lbt-shim.c),
+configured for the resolved BLAS provider, and add it to the link objects.
+"""
+function _compile_lbt_shim(recipe::ImageRecipe)
+    inputs = TOML.parsefile(recipe.link_inputs_path)
+    provider = nothing
+    for lib in get(inputs, "libraries", Any[])
+        if lib["spec"] == recipe.link_native_blas
+            provider = lib
+            break
+        end
+    end
+    provider === nothing &&
+        error("--link-native-blas: provider $(recipe.link_native_blas) was not resolved")
+    dlname = provider["dlname"]
+    # Official Julia builds use the `64_`-suffixed ILP64 interface on 64-bit
+    # platforms; the record's dlname carries that fact.
+    ilp64 = occursin("64_", dlname)
+    suffix = ilp64 ? "64_" : ""
+    shim_src = joinpath(JuliaC.SHIMS_DIR, "lbt-shim.c")
+    obj = joinpath(dirname(recipe.link_inputs_path), "lbt-shim.o")
+    compiler_cmd = JuliaC.get_compiler_cmd()
+    cflags = Base.shell_split(JuliaC.JuliaConfig.cflags(; framework=false))
+    cmdc = compiler_cmd
+    for cf in cflags
+        cmdc = `$cmdc $cf`
+    end
+    cmdc = `$cmdc -DLBT_SHIM_LIBNAME="\"$(dlname)\"" -DLBT_SHIM_SUFFIX="\"$(suffix)\"" -DLBT_SHIM_ILP64=$(ilp64 ? 1 : 0)`
+    cmdc = `$cmdc -c $(shim_src) -o $(obj)`
+    recipe.verbose && println("Running: $cmdc")
+    run(cmdc)
+    push!(recipe.extra_objects, obj)
+    return nothing
 end
 
 """

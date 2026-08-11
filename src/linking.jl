@@ -98,7 +98,10 @@ function native_link_args(recipe::LinkRecipe)
     inputs = TOML.parsefile(inputs_path)
     args = String[]
     for lib in get(inputs, "libraries", Any[])
-        push!(args, lib["path"])
+        # Entries without a path have their sites bound natively but their
+        # symbols satisfied by other link inputs (e.g. libblastrampoline
+        # under --link-native-blas).
+        haskey(lib, "path") && push!(args, lib["path"])
     end
     return args
 end
@@ -154,7 +157,7 @@ function link_products(recipe::LinkRecipe)
         # Link in the whole archive and user-provided objects, then undo WHOLE_ARCHIVE
         cmd2 = `$cmd2 -Wl,$(Base.Linking.WHOLE_ARCHIVE) $(image_recipe.img_path) $(image_recipe.extra_objects) -Wl,$(Base.Linking.NO_WHOLE_ARCHIVE) $(julia_libs)`
         # Libraries bound via direct external symbols rather than lazy ccall stubs
-        if !isempty(image_recipe.link_native_libs)
+        if !isempty(image_recipe.link_native_libs) || image_recipe.link_native_blas !== nothing
             cmd2 = `$cmd2 $(native_link_args(recipe))`
         end
         if Sys.ARCH === :i686

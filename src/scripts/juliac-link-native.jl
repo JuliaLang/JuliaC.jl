@@ -21,7 +21,10 @@ struct ResolvedLibrary
     product::String
     dlid::String
     dlname::String
-    path::String        # absolute path of the file to link
+    # Absolute path of the file to link, or `nothing` for a library whose
+    # sites are bound natively but whose symbols are satisfied by other link
+    # inputs (e.g. libblastrampoline under --link-native-blas).
+    path::Union{String, Nothing}
 end
 
 # Locate a package's source directory without loading the package.
@@ -107,12 +110,22 @@ function resolve_library(spec::String, pkgname::String, prodname::String,
     return ResolvedLibrary(spec, pkgname, prodname, dlid, dlname, path), variant
 end
 
+# The package whose call sites `--link-native-blas` redirects: every
+# libblastrampoline site is bound natively, and its symbols are satisfied by
+# the provider's library plus JuliaC's LBT control-API shim.
+const BLAS_TRAMPOLINE_PACKAGE = "libblastrampoline_jll"
+
 """
 Resolve `--link-native` specs to concrete libraries, close over their record
 dependency edges, register every dlid with the runtime policy table, and
 write the link-inputs manifest to `link_inputs_path`.
+
+With `blas_provider` set (`--link-native-blas`), additionally register
+libblastrampoline's dlids — without linking libblastrampoline itself — and
+resolve the provider (and its closure) as ordinary native link inputs.
 """
-function resolve_and_register!(specs::Vector{String}, link_inputs_path::String)
+function resolve_and_register!(specs::Vector{String}, link_inputs_path::String;
+                               blas_provider::Union{String, Nothing} = nothing)
     # Runtime support check up front, so the failure mode is a clear error
     # rather than a missing-symbol crash at registration time.
     let handle = Base.Libc.Libdl.dlopen("libjulia-internal"; throw_error=false)
@@ -128,6 +141,25 @@ function resolve_and_register!(specs::Vector{String}, link_inputs_path::String)
     resolved = ResolvedLibrary[]
     seen = Set{Tuple{String,String}}()  # (package, product)
     queue = Tuple{String,String,String}[]  # (spec, package, product)
+
+    substituted = ResolvedLibrary[]
+    if blas_provider !== nothing
+        # Register the trampoline's identities so its call sites are bound
+        # natively, but do not link it: its computational symbols resolve
+        # directly into the provider, and its control API into the shim.
+        record = load_record(BLAS_TRAMPOLINE_PACKAGE, record_cache)
+        for prodname in keys(record["products"])
+            lib, _ = resolve_library("<blas trampoline>", BLAS_TRAMPOLINE_PACKAGE,
+                                     String(prodname), record, host)
+            push!(substituted, ResolvedLibrary(lib.spec, lib.package, lib.product,
+                                               lib.dlid, lib.dlname, nothing))
+            push!(seen, (BLAS_TRAMPOLINE_PACKAGE, String(prodname)))
+        end
+        # The provider is an ordinary native-link request (with its closure).
+        push!(queue, (blas_provider, String(split(blas_provider, '.')[1]),
+                      length(split(blas_provider, '.')) == 2 ?
+                          String(split(blas_provider, '.')[2]) : ""))
+    end
 
     for spec in specs
         parts = split(spec, '.')
@@ -146,6 +178,14 @@ function resolve_and_register!(specs::Vector{String}, link_inputs_path::String)
 
     while !isempty(queue)
         (spec, pkgname, prodname) = popfirst!(queue)
+        if isempty(prodname)
+            # expand to every product of the package
+            record = load_record(pkgname, record_cache)
+            for pn in keys(record["products"])
+                push!(queue, (spec, pkgname, String(pn)))
+            end
+            continue
+        end
         (pkgname, prodname) in seen && continue
         push!(seen, (pkgname, prodname))
         record = load_record(pkgname, record_cache)
@@ -165,6 +205,7 @@ function resolve_and_register!(specs::Vector{String}, link_inputs_path::String)
         end
     end
 
+    append!(resolved, substituted)
     for lib in resolved
         ccall(:jl_add_native_link_lib_id, Cvoid, (Cstring,), lib.dlid)
     end
@@ -182,7 +223,9 @@ function resolve_and_register!(specs::Vector{String}, link_inputs_path::String)
             println(io, "product = \"", esc(lib.product), "\"")
             println(io, "dlid = \"", esc(lib.dlid), "\"")
             println(io, "dlname = \"", esc(lib.dlname), "\"")
-            println(io, "path = \"", esc(lib.path), "\"")
+            if lib.path !== nothing
+                println(io, "path = \"", esc(lib.path), "\"")
+            end
             println(io)
         end
     end

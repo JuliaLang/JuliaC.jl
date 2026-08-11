@@ -11,6 +11,7 @@ using Preferences
 
 include("JuliaConfig.jl")
 const SCRIPTS_DIR = @path joinpath(@__DIR__, "scripts")
+const SHIMS_DIR = @path joinpath(@__DIR__, "shims")
 
 Base.@kwdef mutable struct ImageRecipe
     # codegen options
@@ -40,6 +41,11 @@ Base.@kwdef mutable struct ImageRecipe
     # `JuliaLibrary.toml` record; the resolved set is closed over the
     # records' dependency edges.
     link_native_libs::Vector{String} = String[]
+    # BLAS provider package spec for `--link-native-blas`: binds every
+    # libblastrampoline ccall site natively and satisfies them at link time
+    # with this provider's library plus JuliaC's LBT control-API shim,
+    # removing the trampoline layer from the executable entirely.
+    link_native_blas::Union{String, Nothing} = nothing
     # Path of the link-inputs manifest written by the resolution pass and
     # consumed by the link step. Set by compile_products.
     link_inputs_path::Union{String, Nothing} = nothing
@@ -89,6 +95,18 @@ export ImageRecipe, LinkRecipe, BundleRecipe
 export compile_products, link_products, bundle_products
 
 
+# Parse and strip the linkage-mode prefix of a `--link-native` spec.
+# `dynamic:` (the default) strips to the bare spec; `static:` is reserved
+# until static library products exist.
+function _strip_linkage_mode(spec::String)
+    if startswith(spec, "static:")
+        error("--link-native: static linking is not yet supported (spec `$spec`)")
+    elseif startswith(spec, "dynamic:")
+        return String(chopprefix(spec, "dynamic:"))
+    end
+    return spec
+end
+
 # Helper: validate executable name is a bare name (no directories)
 _is_name_only(s::AbstractString) = (basename(s) == s) && !isabspath(s) && !occursin('\\', s)
 
@@ -118,7 +136,14 @@ function _print_usage(io::IO=stdout)
     println(io, "                              libraries are bound via direct external symbols at link")
     println(io, "                              time instead of Julia's lazy ccall stubs. Resolved through")
     println(io, "                              each package's JuliaLibrary.toml record, closed over the")
-    println(io, "                              records' dependency edges.")
+    println(io, "                              records' dependency edges. A spec may carry a linkage-mode")
+    println(io, "                              prefix: `dynamic:` (the default) or `static:` (reserved;")
+    println(io, "                              not yet supported).")
+    println(io, "  --link-native-blas <spec>   Bind every libblastrampoline ccall site natively and")
+    println(io, "                              satisfy it with this BLAS provider (e.g. `OpenBLAS_jll`)")
+    println(io, "                              plus JuliaC's LBT control-API shim, removing the")
+    println(io, "                              trampoline layer from the executable. Same spec format")
+    println(io, "                              as --link-native.")
     println(io, "  --export-foreign-deps <path> Write a JSON manifest of every ccall/cglobal usage site")
     println(io, "                              to <path>, covering both native-linked and lazy-stub sites.")
     println(io, "  --experimental              Forwarded to Julia (needed for --trim)")
@@ -181,6 +206,16 @@ function _parse_cli_args(args::Vector{String})
             i == length(args) && error("--export-abi requires an argument")
             image_recipe.export_abi = args[i+1]
             i += 1
+        elseif startswith(arg, "--link-native-blas")
+            if startswith(arg, "--link-native-blas=")
+                spec = split(arg, '='; limit=2)[2]
+            else
+                i == length(args) && error("--link-native-blas requires a package spec")
+                spec = args[i+1]
+                i += 1
+            end
+            occursin(',', spec) && error("--link-native-blas takes a single provider spec")
+            image_recipe.link_native_blas = _strip_linkage_mode(String(spec))
         elseif startswith(arg, "--link-native")
             if startswith(arg, "--link-native=")
                 names = split(arg, '='; limit=2)[2]
@@ -190,7 +225,7 @@ function _parse_cli_args(args::Vector{String})
                 i += 1
             end
             for name in split(names, ','; keepempty=false)
-                push!(image_recipe.link_native_libs, String(name))
+                push!(image_recipe.link_native_libs, _strip_linkage_mode(String(name)))
             end
         elseif startswith(arg, "--export-foreign-deps")
             if startswith(arg, "--export-foreign-deps=")

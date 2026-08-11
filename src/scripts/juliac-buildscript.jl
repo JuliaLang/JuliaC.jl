@@ -37,7 +37,7 @@ end
 #                                  by the driver's link step (required with --link-native).
 #   --export-foreign-deps <path> : Write a JSON manifest of every ccall/cglobal site.
 source_path, output_type, add_ccallables, use_loaded_libs, scripts_dir, export_abi,
-        link_native_libs, link_inputs_path, export_foreign_deps = let
+        link_native_libs, link_native_blas, link_inputs_path, export_foreign_deps = let
     source_path = ""
     output_type = ""
     add_ccallables = false
@@ -45,6 +45,7 @@ source_path, output_type, add_ccallables, use_loaded_libs, scripts_dir, export_a
     scripts_dir = abspath(dirname(PROGRAM_FILE))
     export_abi = nothing
     link_native_libs = String[]
+    link_native_blas = nothing
     link_inputs_path = nothing
     export_foreign_deps = nothing
     it = Iterators.Stateful(ARGS)
@@ -76,6 +77,11 @@ source_path, output_type, add_ccallables, use_loaded_libs, scripts_dir, export_a
             names = popfirst!(it)
             names === nothing && error("Missing value for --link-native")
             append!(link_native_libs, String(n) for n in split(names, ',', keepempty=false))
+        elseif startswith(arg, "--link-native-blas=")
+            link_native_blas = split(arg, "=", limit=2)[2]
+        elseif arg == "--link-native-blas"
+            link_native_blas = popfirst!(it)
+            link_native_blas === nothing && error("Missing value for --link-native-blas")
         elseif startswith(arg, "--link-inputs=")
             link_inputs_path = split(arg, "=", limit=2)[2]
         elseif arg == "--link-inputs"
@@ -90,16 +96,17 @@ source_path, output_type, add_ccallables, use_loaded_libs, scripts_dir, export_a
     end
     source_path == "" && error("Missing required --source <path>")
     (source_path, output_type, add_ccallables, use_loaded_libs, scripts_dir, export_abi,
-     link_native_libs, link_inputs_path, export_foreign_deps)
+     link_native_libs, link_native_blas, link_inputs_path, export_foreign_deps)
 end
 
 # Native-link policy / foreign-deps export. Both must be registered with the
 # runtime before any user code (and therefore any ccall lowering) runs.
-if !isempty(link_native_libs)
+if !isempty(link_native_libs) || link_native_blas !== nothing
     link_inputs_path !== nothing ||
         error("--link-native requires --link-inputs (passed automatically by the juliac driver)")
     include(joinpath(scripts_dir, "juliac-link-native.jl"))
-    JuliaCLinkNative.resolve_and_register!(link_native_libs, String(link_inputs_path))
+    JuliaCLinkNative.resolve_and_register!(link_native_libs, String(link_inputs_path);
+        blas_provider = link_native_blas === nothing ? nothing : String(link_native_blas))
 end
 if export_foreign_deps !== nothing
     let handle = Base.Libc.Libdl.dlopen("libjulia-internal"; throw_error=false)
