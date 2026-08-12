@@ -220,9 +220,14 @@ function compile_products(recipe::ImageRecipe)
             cmd = `$cmd --link-native-blas $(recipe.link_native_blas)`
         end
         cmd = `$cmd --link-inputs $(recipe.link_inputs_path)`
-        if recipe.export_foreign_deps === nothing
-            recipe.export_foreign_deps = recipe.img_path * ".foreign-deps.json"
-        end
+    end
+    if (is_trim_enabled(recipe) || !isempty(recipe.link_native_libs) ||
+            recipe.link_native_blas !== nothing) && recipe.export_foreign_deps === nothing
+        # The driver needs the foreign-deps manifest to verify native
+        # linkage; under --trim it is additionally the complete ccall
+        # surface of the image, used to prune bundled libraries the image
+        # cannot reference.
+        recipe.export_foreign_deps = recipe.img_path * ".foreign-deps.json"
     end
     if recipe.export_foreign_deps !== nothing
         cmd = `$cmd --export-foreign-deps $(abspath(recipe.export_foreign_deps))`
