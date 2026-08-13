@@ -276,6 +276,7 @@ function resolve_and_register!(specs::Vector{String}, link_inputs_path::String;
     end
 
     substituted = ResolvedLibrary[]
+    provider_bare = nothing
     if blas_provider !== nothing
         # Register the trampoline's identities so its call sites are bound
         # natively, but do not link it: its computational symbols resolve
@@ -291,6 +292,7 @@ function resolve_and_register!(specs::Vector{String}, link_inputs_path::String;
         end
         # The provider is an ordinary native-link request (with its closure).
         bare, static = parse_mode(blas_provider)
+        provider_bare = bare
         parts = split(bare, '.')
         push!(queue, (bare, String(parts[1]),
                       length(parts) == 2 ? String(parts[2]) : "", static))
@@ -354,6 +356,9 @@ function resolve_and_register!(specs::Vector{String}, link_inputs_path::String;
             println(io, "dlname = \"", esc(lib.dlname), "\"")
             println(io, "linkage = \"", esc(lib.linkage), "\"")
             println(io, "location = \"", esc(lib.location), "\"")
+            if provider_bare !== nothing && lib.spec == provider_bare
+                println(io, "blas_provider = true")
+            end
             if lib.path !== nothing
                 println(io, "path = \"", esc(lib.path), "\"")
             end

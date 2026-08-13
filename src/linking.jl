@@ -113,8 +113,17 @@ function native_link_args(recipe::LinkRecipe)
     end
     # Archives first (their references resolve from inputs to their right),
     # then shared libraries, then the archives' system-library closure.
+    # Multiple archives are wrapped in a link group: the linker re-scans the
+    # group until no new members are pulled, so mutually-referencing archive
+    # sets (e.g. SuiteSparse's) need no topological order.
     args = String[]
-    append!(args, static_paths)
+    if length(static_paths) > 1 && Sys.islinux()
+        push!(args, "-Wl,--start-group")
+        append!(args, static_paths)
+        push!(args, "-Wl,--end-group")
+    else
+        append!(args, static_paths)
+    end
     append!(args, dynamic_paths)
     for dep in unique(system_deps)
         push!(args, "-l" * dep)

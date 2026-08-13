@@ -66,6 +66,102 @@ function _bundle_native_artifact_libs!(recipe::BundleRecipe)
     return
 end
 
+# Natively-linked dynamic libraries can carry DT_NEEDED entries naming
+# libraries this build substituted (e.g. SuiteSparse's libraries NEED
+# libblastrampoline, whose sites --link-native-blas binds to the provider).
+# The provider exports the same symbols the substituted library did, so the
+# substitution is completed for native consumers by rewriting their NEEDED
+# entries on the bundled copies. A dynamic consumer of a *statically*
+# consumed library is an inconsistent linkage strategy and errors instead.
+function _patch_native_consumer_needed!(recipe::BundleRecipe)
+    Sys.islinux() || return
+    image_recipe = recipe.link_recipe.image_recipe
+    inputs_path = image_recipe.link_inputs_path
+    (inputs_path === nothing || !isfile(inputs_path)) && return
+    libs = get(TOML.parsefile(inputs_path), "libraries", Any[])
+    substituted = Set{String}(String(l["dlname"]) for l in libs
+                              if get(l, "linkage", "") == "substituted")
+    consumed_static = Set{String}(String(l["dlname"]) for l in libs
+                                  if get(l, "linkage", "") == "static")
+    isempty(substituted) && isempty(consumed_static) && return
+    provider = nothing
+    provider_static = false
+    for l in libs
+        get(l, "blas_provider", false) === true || continue
+        if get(l, "linkage", "") == "dynamic"
+            provider = String(l["dlname"])
+        else
+            provider_static = true
+        end
+    end
+    roots = [joinpath(recipe.output_dir, recipe.libdir),
+             joinpath(recipe.output_dir, recipe.libdir, "julia")]
+    for l in libs
+        get(l, "linkage", "") == "dynamic" || continue
+        soname = String(l["dlname"])
+        for r in roots
+            path = joinpath(r, soname)
+            isfile(path) || continue
+            needed = split(read(`$(Patchelf_jll.patchelf()) --print-needed $(path)`, String))
+            for n in needed
+                n = String(n)
+                if n in substituted
+                    provider === nothing &&
+                        error("--link-native: bundled $(soname) requires substituted $(n) " *
+                              "at load time" * (provider_static ?
+                              "; a statically-linked BLAS provider with dynamically-linked " *
+                              "native consumers is not yet supported" : ""))
+                    run(`$(Patchelf_jll.patchelf()) --replace-needed $(n) $(provider) $(path)`)
+                elseif n in consumed_static
+                    error("--link-native: bundled $(soname) requires $(n) at load time, " *
+                          "but that library was consumed statically; request " *
+                          "`static:` linkage for its dependents as well")
+                end
+            end
+            break
+        end
+    end
+    return
+end
+
+# Backstop for lazily-provisioned consumers the surgery above does not
+# touch: no shared library remaining in the bundle may reference a soname
+# this build removed.
+function _verify_no_dangling_needed!(recipe::BundleRecipe)
+    Sys.islinux() || return
+    image_recipe = recipe.link_recipe.image_recipe
+    inputs_path = image_recipe.link_inputs_path
+    (inputs_path === nothing || !isfile(inputs_path)) && return
+    libs = get(TOML.parsefile(inputs_path), "libraries", Any[])
+    removed = Set{String}(String(l["dlname"]) for l in libs
+                          if get(l, "linkage", "") in ("static", "substituted"))
+    isempty(removed) && return
+    dangling = String[]
+    for dir in (joinpath(recipe.output_dir, recipe.libdir),
+                joinpath(recipe.output_dir, recipe.libdir, "julia"))
+        isdir(dir) || continue
+        for name in readdir(dir)
+            occursin(".so", name) || continue
+            path = joinpath(dir, name)
+            islink(path) && continue
+            needed = try
+                split(read(`$(Patchelf_jll.patchelf()) --print-needed $(path)`, String))
+            catch
+                continue
+            end
+            for n in needed
+                String(n) in removed && push!(dangling, "$name -> $n")
+            end
+        end
+    end
+    isempty(dangling) ||
+        error("--link-native: bundled libraries still reference removed libraries " *
+              "at load time (their linkage strategy is inconsistent with the " *
+              "native-link request; consider extending --link-native over them): " *
+              join(unique(dangling), ", "))
+    return
+end
+
 # Strip a shared-library filename to its stem (drop `.so[.N]*`, `.dylib`,
 # `.dll` and version decorations).
 _shlib_stem(name::String) =
@@ -449,6 +545,10 @@ function bundle_products(recipe::BundleRecipe)
     # the executable's rpath like the stdlib libraries do.
     _bundle_native_artifact_libs!(recipe)
 
+    # Complete the substitution for natively-linked native-code consumers
+    # (rewrite their DT_NEEDED entries on the bundled copies).
+    _patch_native_consumer_needed!(recipe)
+
     # Under --trim, drop bundled libraries the image cannot reference (the
     # foreign-deps manifest is its complete ccall surface).
     _filter_unreferenced_libraries!(recipe)
@@ -486,6 +586,7 @@ function bundle_products(recipe::BundleRecipe)
     # The bundle must satisfy what the link line promised; check now that
     # every mutation (filters, privatization, removals) has run.
     _verify_native_link_bundle!(recipe)
+    _verify_no_dangling_needed!(recipe)
 
     # Print the bundle size tables now that codegen libraries have been pruned
     # and any privatization applied, so the sizes reflect the final bundle.
