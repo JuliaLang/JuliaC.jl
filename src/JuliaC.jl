@@ -27,7 +27,7 @@ Base.@kwdef mutable struct ImageRecipe
     # compile-time configuration
     verbose::Bool = false
     quiet::Bool = false
-    use_loaded_libs::Bool = false
+    use_loaded_libs::Bool = Sys.isfreebsd()
     # C shim sources to compile and link into the final artifact
     c_sources::Vector{String} = String[]
     cflags::Vector{String} = String[]

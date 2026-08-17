@@ -117,7 +117,7 @@ function cflags(; framework::Bool=false)
     if Sys.isunix()
         print(flags, " -fPIC")
     end
-    if Sys.isapple()
+    if Sys.isbsd()
         print(flags, " -Wno-nullability-completeness")
     end
     return String(take!(flags))

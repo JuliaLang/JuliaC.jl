@@ -10,16 +10,16 @@ High-level steps:
 5) Remove originals. Codesigning is handled in bundling.
 """
 
-function privatize_libjulia_macos!(recipe::BundleRecipe)
+function privatize_libjulia!(recipe::BundleRecipe, platform::MacOSPlatform)
     try
-        privatize_libjulia_common!(recipe, MacOSPlatform())
+        privatize_libjulia_common!(recipe, platform)
     catch e
-        error("Failed to privatize libjulia on macOS", e)
+        error("Failed to privatize libjulia", e)
     end
 end
 
 # macOS-specific dependency extraction
-function get_dependencies_macos(bin::String)
+function plat_get_deps(::MacOSPlatform, bin::String)
     out = try
         read(`otool -L $(bin)`, String)
     catch
@@ -38,20 +38,16 @@ function get_dependencies_macos(bin::String)
     return deps
 end
 
-function install_name_id!(libpath::String, new_id::String)
+function plat_set_library_id!(::MacOSPlatform, libpath::String, new_id::String)
     run(`install_name_tool -id $(new_id) $(libpath)`)
 end
 
-function install_name_change!(binpath::String, old_id::String, new_id::String)
+function plat_install_name_change!(::MacOSPlatform, binpath::String, old_id::String, new_id::String)
     run(`install_name_tool -change $(old_id) $(new_id) $(binpath)`)
 end
 
-# Platform hooks for macOS
 plat_ext(::MacOSPlatform) = ".dylib"
 plat_dep_prefix(::MacOSPlatform) = "@rpath/"
-plat_set_library_id!(::MacOSPlatform, libpath::String, new_id::String) = install_name_id!(libpath, new_id)
-plat_install_name_change!(::MacOSPlatform, binpath::String, old::String, new::String) = install_name_change!(binpath, old, new)
-plat_get_deps(::MacOSPlatform, bin::String) = get_dependencies_macos(bin)
 
 function _codesign_bundle!(recipe::BundleRecipe)
     quiet = recipe.link_recipe.image_recipe.quiet

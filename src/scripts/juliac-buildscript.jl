@@ -33,7 +33,7 @@ source_path, output_type, add_ccallables, use_loaded_libs, scripts_dir, export_a
     source_path = ""
     output_type = ""
     add_ccallables = false
-    use_loaded_libs = false
+    use_loaded_libs = !Sys.isfreebsd()
     scripts_dir = abspath(dirname(PROGRAM_FILE))
     export_abi = nothing
     it = Iterators.Stateful(ARGS)

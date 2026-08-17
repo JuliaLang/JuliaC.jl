@@ -119,16 +119,3 @@ function remove_unnecessary_libraries(recipe::BundleRecipe)
         end
     end
 end
-
-function privatize_libjulia!(recipe::BundleRecipe)
-    if Sys.isapple()
-        privatize_libjulia_macos!(recipe)
-    elseif Sys.islinux()
-        privatize_libjulia_linux!(recipe)
-    else
-        @warn "Privatization not implemented for this OS"
-    end
-end
-
-
-

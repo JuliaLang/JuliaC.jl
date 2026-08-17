@@ -1,11 +1,11 @@
 """
-Linux-specific privatization for libjulia.
+Linux- and FreeBSD-specific privatization for libjulia.
 
 High-level steps:
 1) Copy `libjulia*` and `libjulia-internal*` to salted basenames next to originals.
 2) Set SONAME of each salted library to the salted basename (via patchelf) and DEP_LIBS with ObjectFile.jl
 3) Rewrite DT_NEEDED entries in the built artifact and salted libs to the salted basenames
-   (no `@rpath` on Linux; DT_NEEDED entries are plain basenames).
+   (no `@rpath` on Linux or FreeBSD; DT_NEEDED entries are plain basenames).
 4) Recreate symlinks
 5) Patch symbol versions to avoid interposition.
 6) Remove originals.
@@ -13,11 +13,13 @@ High-level steps:
 
 using Patchelf_jll
 
-function privatize_libjulia_linux!(recipe::BundleRecipe)
-    try
-        salted_paths = privatize_libjulia_common!(recipe, LinuxPlatform())
+const LinuxOrBSD = Union{LinuxPlatform,FreeBSDPlatform}
 
-        # Version-stamp symbol versions to avoid interposition (Linux-specific)
+function privatize_libjulia!(recipe::BundleRecipe, platform::LinuxOrBSD)
+    try
+        salted_paths = privatize_libjulia_common!(recipe, platform)
+
+        # Version-stamp symbol versions to avoid interposition
         if salted_paths !== nothing
             try
                 version_stamp_symbols!(salted_paths, recipe.link_recipe.outname)
@@ -26,21 +28,19 @@ function privatize_libjulia_linux!(recipe::BundleRecipe)
             end
         end
     catch e
-        error("Failed to privatize libjulia on Linux", e)
+        error("Failed to privatize libjulia", e)
     end
 end
 
-# Linux-specific dependency extraction
-function get_dependencies_linux(bin::String)
-    out = read(`$(Patchelf_jll.patchelf()) --print-needed $(bin)`, String)
-    return filter(!isempty, split(out, '\n'))
+function plat_get_deps(::LinuxOrBSD, bin::String)
+    filter!(!isempty, readlines(`$(Patchelf_jll.patchelf()) --print-needed $(bin)`))
 end
 
-function patchelf_replace_needed!(binpath::String, old::String, new::String)
+function plat_install_name_change!(::LinuxOrBSD, binpath::String, old::String, new::String)
     run(`$(Patchelf_jll.patchelf()) --replace-needed $(old) $(new) $(binpath)`)
 end
 
-function patchelf_set_soname!(libpath::String, soname::String)
+function plat_set_library_id!(::LinuxOrBSD, libpath::String, soname::String)
     run(`$(Patchelf_jll.patchelf()) --set-soname $(soname) $(libpath)`)
 end
 
@@ -53,10 +53,5 @@ function version_stamp_symbols!(salted_paths::Dict{String,String}, product::Stri
     PatchVersion.patch_version!(product, old_ver, new_ver)
 end
 
-# Platform hooks for Linux
-plat_ext(::LinuxPlatform) = ".so"
-plat_dep_prefix(::LinuxPlatform) = ""
-plat_set_library_id!(::LinuxPlatform, libpath::String, new_id::String) = patchelf_set_soname!(libpath, basename(new_id))
-plat_install_name_change!(::LinuxPlatform, binpath::String, old::String, new::String) = patchelf_replace_needed!(binpath, old, new)
-plat_get_deps(::LinuxPlatform, bin::String) = get_dependencies_linux(bin)
-
+plat_ext(::LinuxOrBSD) = ".so"
+plat_dep_prefix(::LinuxOrBSD) = ""

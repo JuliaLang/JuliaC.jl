@@ -23,7 +23,7 @@ function get_rpath(recipe::LinkRecipe)
 
     if Sys.isapple()
         base_token = "-Wl,-rpath,'@loader_path/"
-    elseif Sys.islinux()
+    elseif Sys.isunix()
         base_token = "-Wl,-rpath,'\$ORIGIN/"
     else
         @warn "get_rpath not implemented for this platform"
@@ -35,7 +35,11 @@ function get_rpath(recipe::LinkRecipe)
     base_path = rpath
     flag1 = base_token * base_path * "'"
     flag2 = base_token * priv_path * "'"
-    return string(flag1, " ", flag2)
+    out = string(flag1, " ", flag2)
+    if Sys.isunix() && !Sys.isapple()
+        out *= " -Wl,-z,origin"
+    end
+    return out
 end
 
 function get_compiler_cmd(; cplusplus::Bool=false)
@@ -53,8 +57,13 @@ function get_compiler_cmd(; cplusplus::Bool=false)
                             cplusplus ? "g++.exe" : "gcc.exe")
             compiler_cmd = `$path`
         else
-            compilers_cpp = ("g++", "clang++")
-            compilers_c = ("gcc", "clang")
+            if Sys.isbsd()  # prefer clang on BSDs (including macOS, but there gcc is clang)
+                compilers_cpp = ("clang++", "g++")
+                compilers_c = ("clang", "gcc")
+            else
+                compilers_cpp = ("g++", "clang++")
+                compilers_c = ("gcc", "clang")
+            end
             found_compiler = false
             if cplusplus
                 for compiler in compilers_cpp
@@ -148,7 +157,7 @@ function link_products(recipe::LinkRecipe)
             cmd2 = `$cmd2 -Wl,--out-implib=$(import_lib_path)`
         elseif Sys.isapple()
             cmd2 = `$cmd2 -Wl,-install_name,@rpath/$(lib_name)`
-        elseif Sys.islinux()
+        else
             # Link libm if the compiled code references math symbols, e.g. with --cpu-target=generic
             cmd2 = `$cmd2 -Wl,-soname,$(lib_name) -Wl,--as-needed -lm`
         end

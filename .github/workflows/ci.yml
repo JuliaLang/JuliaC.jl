@@ -61,4 +61,31 @@ jobs:
       - uses: julia-actions/cache@v3
       - uses: julia-actions/julia-buildpkg@v1
       - uses: julia-actions/julia-runtest@v1
-
+  test-freebsd:
+    name: Julia ${{ matrix.version }} - FreeBSD - ${{ matrix.arch }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        version: [ '1' ]
+        arch: [ x86_64 ]
+    steps:
+      - uses: actions/checkout@v7
+      - uses: vmactions/freebsd-vm@v1
+        with:
+          copyback: false
+          arch: ${{ matrix.arch }}
+          prepare: |
+            pkg update -q
+            pkg install -q -y curl
+            mkdir -p /tmp/juliaup
+            curl -fsSL https://install.julialang.org | sh -s -- \
+                --path=/tmp/juliaup \
+                --default-channel=${{ matrix.version }} \
+                --yes \
+                --add-to-path=no \
+                --background-selfupdate=0 \
+                --startup-selfupdate=0
+            ln -s /tmp/juliaup/bin/julia /usr/local/bin/julia
+          run: |
+            julia --project=. -e 'using Pkg; Pkg.instantiate(); Pkg.test()'

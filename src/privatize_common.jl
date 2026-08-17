@@ -1,5 +1,5 @@
 """
-Common privatization logic shared between macOS and Linux.
+Common privatization logic shared between platforms.
 """
 
 using Base: BinaryPlatforms
@@ -9,6 +9,13 @@ using ObjectFile
 abstract type PrivatizePlatform end
 struct MacOSPlatform <: PrivatizePlatform end
 struct LinuxPlatform <: PrivatizePlatform end
+struct FreeBSDPlatform <: PrivatizePlatform end
+struct NoPrivatize <: PrivatizePlatform end
+
+const PRIVATIZE_TARGET = Sys.isapple() ? MacOSPlatform() :
+                         Sys.islinux() ? LinuxPlatform() :
+                         Sys.isfreebsd() ? FreeBSDPlatform() :
+                         NoPrivatize()
 
 # Per-platform hooks (implemented in platform-specific files)
 plat_ext(::PrivatizePlatform) = error("Unsupported platform")
@@ -16,6 +23,13 @@ plat_dep_prefix(::PrivatizePlatform) = error("Unsupported platform")
 plat_set_library_id!(::PrivatizePlatform, libpath::String, new_id::String) = nothing
 plat_install_name_change!(::PrivatizePlatform, binpath::String, old::String, new::String) = error("Unsupported platform change")
 plat_get_deps(::PrivatizePlatform, bin::String) = String[]
+
+privatize_libjulia!(recipe::BundleRecipe) = privatize_libjulia!(recipe, PRIVATIZE_TARGET)
+
+function privatize_libjulia!(::BundleRecipe, ::NoPrivatize)
+    @warn "Privatization not implemented for this OS"
+    return nothing
+end
 
 function privatize_libjulia_common!(recipe::BundleRecipe, platform::PrivatizePlatform)
     bundle_root = recipe.output_dir

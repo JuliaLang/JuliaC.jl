@@ -51,7 +51,10 @@
             bun = JuliaC.BundleRecipe(link_recipe=link, output_dir=outdir, privatize=true)
             JuliaC.bundle_products(bun)
 
-            julia_dir = joinpath(outdir, "lib", "julia")
+            julia_dir = joinpath(outdir, "lib")
+            if !PackageCompiler.is_local_julia_build()
+                julia_dir = joinpath(julia_dir, "julia")
+            end
             @test isdir(julia_dir)
             dylibs = filter(f -> endswith(f, ".dylib") || endswith(f, ".so"), readdir(julia_dir; join=true))
             salted = filter(f -> occursin("_libjulia", basename(f)), dylibs)
@@ -59,7 +62,7 @@
             for f in salted
                 if Sys.isapple()
                     out = read(`otool -D $(f)`, String)
-                elseif Sys.islinux()
+                else
                     out = read(`$(Patchelf_jll.patchelf()) --print-soname $(f)`, String)
                 end
                 @test occursin("_libjulia", out)
@@ -143,8 +146,8 @@
     end
 
     # https://github.com/JuliaLang/JuliaC.jl/pull/74
-    @testset "Library has SONAME (Linux)" begin
-        if Sys.islinux()
+    @testset "Library has SONAME (Linux/FreeBSD)" begin
+        if Sys.islinux() || Sys.isfreebsd()
             outdir = mktempdir()
             libname = "libhassonametest"
             libout = joinpath(outdir, libname)
@@ -196,8 +199,8 @@
     end
 
     # https://github.com/JuliaLang/JuliaC.jl/pull/69
-    @testset "`ld_flags` passes flags to compiler (Linux + MacOS)" begin
-        if Sys.islinux() || Sys.isapple() 
+    @testset "`ld_flags` passes flags to compiler (Unix)" begin
+        if Sys.isunix()
             outdir = mktempdir()
             libname = "libhasdebugtest"
             libout = joinpath(outdir, libname)
@@ -213,10 +216,10 @@
 
             libfile_name = libname * "." * Base.BinaryPlatforms.platform_dlext()
             libpath = joinpath(outdir, "lib", libfile_name)
-            output = if Sys.islinux()
-                readchomp(`$(Patchelf_jll.patchelf()) --print-rpath $(libpath)`)
+            output = if Sys.isapple()
+                readchomp(`otool -l $(libpath)`)
             else
-                output = readchomp(`otool -l $(libpath)`)
+                readchomp(`$(Patchelf_jll.patchelf()) --print-rpath $(libpath)`)
             end
             @test occursin(rpath, output)
         end

@@ -38,6 +38,13 @@ let
                             end
                         end
                     end
+                elseif (nm = first(splitext(libfile))) in ("libjulia", "libjulia-internal")
+                    h = nm == "libjulia" ?
+                        cglobal(:jl_libjulia_handle) :
+                        cglobal(:jl_libjulia_internal_handle)
+                    if h != C_NULL
+                        return h
+                    end
                 end
 
                 # Fall back to normal loader behavior
