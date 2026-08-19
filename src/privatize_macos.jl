@@ -46,10 +46,18 @@ function install_name_change!(binpath::String, old_id::String, new_id::String)
     run(`install_name_tool -change $(old_id) $(new_id) $(binpath)`)
 end
 
+# macOS's renamer prepends `<salt>_` to the libjulia token (install_name_tool can grow strings); names without the token are left untouched.
+_salt_julia_name_macos(name::AbstractString, salt::String) =
+    replace(String(name), "libjulia" => string(salt, "_", "libjulia"))
+
 # Platform hooks for macOS
 plat_ext(::MacOSPlatform) = ".dylib"
-plat_dep_prefix(::MacOSPlatform) = "@rpath/"
-plat_set_library_id!(::MacOSPlatform, libpath::String, new_id::String) = install_name_id!(libpath, new_id)
+# Dependencies are referenced via @rpath on macOS.
+plat_dep_ref(::MacOSPlatform, name::String) = string("@rpath/", name)
+plat_make_renamer(::MacOSPlatform, salt::String) = name -> _salt_julia_name_macos(name, salt)
+# macOS sets the install_name id to @rpath/<salted basename>.
+plat_set_library_id!(::MacOSPlatform, smap::SaltMap, libpath::String) =
+    install_name_id!(libpath, plat_dep_ref(MacOSPlatform(), basename(libpath)))
 plat_install_name_change!(::MacOSPlatform, binpath::String, old::String, new::String) = install_name_change!(binpath, old, new)
 plat_get_deps(::MacOSPlatform, bin::String) = get_dependencies_macos(bin)
 

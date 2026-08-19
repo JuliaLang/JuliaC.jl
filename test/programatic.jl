@@ -53,16 +53,44 @@
 
             julia_dir = joinpath(outdir, "lib", "julia")
             @test isdir(julia_dir)
-            dylibs = filter(f -> endswith(f, ".dylib") || endswith(f, ".so"), readdir(julia_dir; join=true))
-            salted = filter(f -> occursin("_libjulia", basename(f)), dylibs)
-            @test !isempty(salted)
-            for f in salted
-                if Sys.isapple()
+            libfiles = filter(f -> endswith(f, ".dylib") || occursin(".so", basename(f)),
+                              readdir(julia_dir; join=true))
+
+            if Sys.isapple()
+                # macOS keeps the prepend scheme: a "<salt>_libjulia*" sibling exists
+                # and its install_name still contains "_libjulia".
+                salted = filter(f -> occursin("_libjulia", basename(f)), libfiles)
+                @test !isempty(salted)
+                for f in salted
                     out = read(`otool -D $(f)`, String)
-                elseif Sys.islinux()
-                    out = read(`$(Patchelf_jll.patchelf()) --print-soname $(f)`, String)
+                    @test occursin("_libjulia", out)
                 end
-                @test occursin("_libjulia", out)
+            elseif Sys.islinux()
+                # Linux uses equal-length substitution: the leading "libjulia" token of
+                # each library's basename is replaced by an 8-char salt.  The real files
+                # carry the full version (so.MAJ.MIN.PATCH) while their SONAME carries the
+                # two-component version (so.MAJ.MIN); the salt substitution is applied to
+                # both so neither grows.  The original unsalted libjulia* files are gone
+                # and the salted siblings' SONAMEs no longer contain "libjulia".
+                ver = "$(VERSION.major).$(VERSION.minor)"
+                reals = filter(f -> !islink(f), libfiles)
+                # original unsalted internal lib must be removed
+                @test !any(f -> startswith(basename(f), "libjulia"), reals)
+                # a salted sibling exists: <salt>-internal.so.MAJ.MIN.PATCH where <salt>
+                # is an 8-char token replacing the leading "libjulia" token.
+                salted = filter(reals) do f
+                    b = basename(f)
+                    m = match(Regex("^([A-Za-z0-9_-]{8})-internal\\.so\\.$(VERSION.major)\\.$(VERSION.minor)\\."), b)
+                    m !== nothing && m.captures[1] != "libjulia"
+                end
+                @test !isempty(salted)
+                for f in salted
+                    soname = readchomp(`$(Patchelf_jll.patchelf()) --print-soname $(f)`)
+                    @test !occursin("libjulia", soname)
+                    # SONAME is the salted two-component form of the salted filename's stem
+                    salt = first(basename(f), 8)
+                    @test soname == "$(salt)-internal.so.$ver"
+                end
             end
 
             dlext = Base.BinaryPlatforms.platform_dlext()

@@ -12,6 +12,7 @@ const TEST_LIB_SRC = joinpath(TEST_LIB_PROJ, "src", "libtest.jl")
 include("utils.jl")
 
 include("programatic.jl")
+include("elf_ops.jl")
 include("cli.jl")
 include("trimming.jl")
 include("quiet.jl")
