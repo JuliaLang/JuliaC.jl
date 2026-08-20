@@ -130,7 +130,7 @@ If you pass `--compile-ccallable` (or set `ImageRecipe.add_ccallables = true`), 
 
 ### Platform notes
 
-- macOS/Linux: requires `clang` or `gcc` available on PATH
+- macOS/Linux/BSD: requires `clang` or `gcc` available on PATH
 - Windows: looks for a MinGW compiler via `LazyArtifacts` or `JULIA_CC`
 - You can override the compiler with `ENV["JULIA_CC"]` (e.g. `clang`/`gcc` path)
 
