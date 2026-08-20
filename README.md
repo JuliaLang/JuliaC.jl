@@ -65,6 +65,10 @@ julia --project -e "using JuliaC; JuliaC.main(ARGS)" -- \
 - `--bundle <dir>`: Copy required Julia libs/stdlibs and artifacts next to the output; also sets a relative rpath.
 - `--bundle-lazy-artifacts`: Also copy lazy artifacts into the bundle (off by default; opt in
   when your dependencies download artifacts on first use).
+- `--privatize[=<salt>]`: Prefix bundled `libjulia` filenames and symbol versions with a salt
+  (Unix), isolating runtimes loaded into the same process. By default, the salt is derived
+  from the product and Julia versions. An explicit salt must match
+  `[A-Za-z_][A-Za-z0-9_]*` and contain at most 8 characters.
 - `--trim[=mode]`: Enable code trimming (e.g. `--trim=safe`). Use `--trim=no` to disable.
 - `--compile-ccallable`: Export `ccallable` entrypoints (see C-callable section).
 - `--experimental`: Forwarded to Julia; required for `--trim` on some builds.

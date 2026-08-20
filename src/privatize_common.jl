@@ -5,6 +5,7 @@ Common privatization logic shared between macOS and Linux.
 using Base: BinaryPlatforms
 using Mmap
 using ObjectFile
+using SHA
 
 abstract type PrivatizePlatform end
 struct MacOSPlatform <: PrivatizePlatform end
@@ -17,7 +18,7 @@ plat_set_library_id!(::PrivatizePlatform, libpath::String, new_id::String) = not
 plat_install_name_change!(::PrivatizePlatform, binpath::String, old::String, new::String) = error("Unsupported platform change")
 plat_get_deps(::PrivatizePlatform, bin::String) = String[]
 
-function privatize_libjulia_common!(recipe::BundleRecipe, platform::PrivatizePlatform)
+function privatize_libjulia_common!(recipe::BundleRecipe, platform::PrivatizePlatform, salt::String)
     bundle_root = recipe.output_dir
     product = recipe.link_recipe.outname
     platform_ext = plat_ext(platform)
@@ -45,7 +46,6 @@ function privatize_libjulia_common!(recipe::BundleRecipe, platform::PrivatizePla
     end
     isempty(real_files) && return
 
-    salt = random_salt(8)
     salted_paths = Dict{String,String}()
     salted_filenames = Dict{String,String}()
     originals_to_remove = String[]
@@ -145,10 +145,63 @@ function replacements_for(bin::String, salted_filenames::Dict{String,String}, pl
     return collect(seen)
 end
 
+# The Linux symbol version must fit in `JL_LIBJULIA_<major>.<minor>`.
+const SALT_LENGTH = 8
+
+# Use valid C identifiers and exclude leading `-` from filenames.
+const SALT_CHARS = ['a':'z'; 'A':'Z'; '0':'9'; '_']
+const SALT_LEAD_CHARS = ['a':'z'; 'A':'Z'; '_']
+
 """
-Generate a random salt string for library names.
+    validate_salt(salt::AbstractString) -> String
+
+Validate and return a library-name prefix.
 """
-function random_salt(len::Int=8)
-    chars = ['a':'z'; 'A':'Z'; '0':'9'; '-'; '_']
-    return String(rand(chars, len))
+function validate_salt(salt::AbstractString)
+    isempty(salt) && throw(ArgumentError("privatization salt must not be empty"))
+    length(salt) > SALT_LENGTH &&
+        throw(ArgumentError("privatization salt \"$salt\" is longer than $SALT_LENGTH characters"))
+    (first(salt) in SALT_LEAD_CHARS && all(in(SALT_CHARS), salt)) ||
+        throw(ArgumentError("privatization salt \"$salt\" must match [A-Za-z_][A-Za-z0-9_]*"))
+    return String(salt)
+end
+
+"""
+    derive_salt(inputs::AbstractString...) -> String
+
+Return a deterministic `SALT_LENGTH`-character hash of `inputs`.
+"""
+function derive_salt(inputs::AbstractString...)
+    digest = SHA.sha256(join(inputs, '\0'))
+    chars = Vector{Char}(undef, SALT_LENGTH)
+    chars[1] = SALT_LEAD_CHARS[digest[1] % length(SALT_LEAD_CHARS) + 1]
+    for i in 2:SALT_LENGTH
+        chars[i] = SALT_CHARS[digest[i] % length(SALT_CHARS) + 1]
+    end
+    return String(chars)
+end
+
+"""
+    salt_for(recipe::BundleRecipe) -> String
+
+Return the explicit salt, or derive one from the product and Julia versions.
+"""
+function salt_for(recipe::BundleRecipe)
+    salt = recipe.privatize
+    salt isa AbstractString && return validate_salt(salt)
+    name, version = project_identity(recipe.link_recipe.image_recipe)
+    return derive_salt(basename(recipe.link_recipe.outname), name, version, string(VERSION))
+end
+
+# Return empty fields for a project without a name or version.
+function project_identity(recipe::ImageRecipe)
+    project = recipe.instantiated_project
+    isempty(project) && return "", ""
+    for f in ("JuliaProject.toml", "Project.toml")
+        path = joinpath(project, f)
+        isfile(path) || continue
+        data = TOML.parsefile(path)
+        return string(get(data, "name", "")), string(get(data, "version", ""))
+    end
+    return "", ""
 end
