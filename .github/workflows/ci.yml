@@ -78,7 +78,6 @@ jobs:
           prepare: |
             pkg update -q
             pkg install -q -y curl
-            mkdir -p /tmp/juliaup
             curl -fsSL https://install.julialang.org | sh -s -- \
                 --path=/tmp/juliaup \
                 --default-channel=${{ matrix.version }} \
