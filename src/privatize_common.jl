@@ -149,6 +149,6 @@ end
 Generate a random salt string for library names.
 """
 function random_salt(len::Int=8)
-    chars = ['a':'z'; 'A':'Z'; '0':'9'; '-'; '_']
+    chars = ['a':'z'; 'A':'Z'; '0':'9'; '_']
     return String(rand(chars, len))
 end

@@ -43,6 +43,9 @@
     end
 
     @testset "Privatization (Unix salted ids)" begin
+        for _ = 1:1000
+            @test !startswith(JuliaC.random_salt(), '-')
+        end
         if Sys.isunix()
             outdir = mktempdir()
             libout = joinpath(outdir, "libprivtest")
@@ -197,7 +200,7 @@
 
     # https://github.com/JuliaLang/JuliaC.jl/pull/69
     @testset "`ld_flags` passes flags to compiler (Linux + MacOS)" begin
-        if Sys.islinux() || Sys.isapple() 
+        if Sys.islinux() || Sys.isapple()
             outdir = mktempdir()
             libname = "libhasdebugtest"
             libout = joinpath(outdir, libname)
