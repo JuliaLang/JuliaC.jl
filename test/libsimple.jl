@@ -70,6 +70,14 @@ Base.@ccallable function countsame(list::Ptr{MyTwoVec}, n::Int32)::Int32
     return count
 end
 
+Base.@ccallable function zero_first(p::Ptr{Cvoid}, n::Int32)::Cvoid
+    q = Ptr{UInt8}(p)
+    for i in 1:n
+        unsafe_store!(q, 0x00, i)
+    end
+    return nothing
+end
+
 export countsame, copyto_and_sum
 
 # FIXME? varargs

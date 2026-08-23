@@ -139,6 +139,18 @@ end
     data_type = abi["types"][carray3d["fields"][2]["type_id"]]
     @test data_type["kind"] == "pointer"
     @test abi["types"][data_type["pointee_type_id"]]["name"] == "Float64"
+
+    # `Cvoid` is a primitive node named "Cvoid", both as a return type and as the
+    # pointee of `Ptr{Cvoid}`; the fieldless-struct spelling "Nothing" never appears.
+    zero_first = abi["functions"][findfirst(f["symbol"] == "zero_first" for f in abi["functions"])]
+    cvoid_id = zero_first["returns"]["type_id"]
+    cvoid = abi["types"][cvoid_id]
+    @test cvoid["kind"] == "primitive"
+    @test cvoid["name"] == "Cvoid"
+    ptr_cvoid = abi["types"][zero_first["arguments"][1]["type_id"]]
+    @test ptr_cvoid["kind"] == "pointer"
+    @test ptr_cvoid["pointee_type_id"] == cvoid_id
+    @test !any(Bool[type["name"] == "Nothing" for type in abi["types"]])
 end
 
 @testset "CLI library privatize end-to-end" begin
