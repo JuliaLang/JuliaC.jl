@@ -123,10 +123,11 @@
         outdir = mktempdir()
         libname = "libmultiextraobjs"
         libout = joinpath(outdir, libname)
-        c_sources = [
-            abspath(joinpath(@__DIR__, "c", "cshim_extra1.c")),
-            abspath(joinpath(@__DIR__, "c", "cshim_extra2.c")),
-        ]
+        # Compilation deposits the object files alongside their sources, so work
+        # from copies in the temporary directory to keep `test/c` clean.
+        c_sources = map(["cshim_extra1.c", "cshim_extra2.c"]) do name
+            cp(joinpath(@__DIR__, "c", name), joinpath(outdir, name))
+        end
         img = JuliaC.ImageRecipe(
             file = TEST_LIB_SRC,
             output_type = "--output-lib",
