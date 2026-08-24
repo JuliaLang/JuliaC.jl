@@ -13,14 +13,14 @@ High-level steps:
 
 using Patchelf_jll
 
-function privatize_libjulia_linux!(recipe::BundleRecipe)
+function privatize_libjulia_linux!(recipe::BundleRecipe, salt::String)
     try
-        salted_paths = privatize_libjulia_common!(recipe, LinuxPlatform())
+        salted_paths = privatize_libjulia_common!(recipe, LinuxPlatform(), salt)
 
         # Version-stamp symbol versions to avoid interposition (Linux-specific)
         if salted_paths !== nothing
             try
-                version_stamp_symbols!(salted_paths, recipe.link_recipe.outname)
+                version_stamp_symbols!(salted_paths, recipe.link_recipe.outname, salt)
             catch e
                 error("Failed to patch symbol versions on salted libraries", e)
             end
@@ -44,9 +44,9 @@ function patchelf_set_soname!(libpath::String, soname::String)
     run(`$(Patchelf_jll.patchelf()) --set-soname $(soname) $(libpath)`)
 end
 
-function version_stamp_symbols!(salted_paths::Dict{String,String}, product::String)
+function version_stamp_symbols!(salted_paths::Dict{String,String}, product::String, salt::String)
     old_ver = "JL_LIBJULIA_$(VERSION.major).$(VERSION.minor)"
-    new_ver = "JL_$(random_salt(8))_$(VERSION.major).$(VERSION.minor)"
+    new_ver = "JL_$(salt)_$(VERSION.major).$(VERSION.minor)"
     for p in values(salted_paths)
         PatchVersion.patch_version!(p, old_ver, new_ver)
     end

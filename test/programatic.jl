@@ -49,6 +49,7 @@
             link = JuliaC.LinkRecipe(image_recipe=img_lib, outname=libout, rpath=JuliaC.RPATH_BUNDLE)
             JuliaC.link_products(link)
             bun = JuliaC.BundleRecipe(link_recipe=link, output_dir=outdir, privatize=true)
+            salt = JuliaC.salt_for(bun)
             JuliaC.bundle_products(bun)
 
             julia_dir = joinpath(outdir, "lib", "julia")
@@ -56,6 +57,8 @@
             dylibs = filter(f -> endswith(f, ".dylib") || endswith(f, ".so"), readdir(julia_dir; join=true))
             salted = filter(f -> occursin("_libjulia", basename(f)), dylibs)
             @test !isempty(salted)
+            # The salt is stable across builds.
+            @test all(f -> startswith(basename(f), salt * "_"), salted)
             for f in salted
                 if Sys.isapple()
                     out = read(`otool -D $(f)`, String)
@@ -260,6 +263,50 @@
             @test ver.major == 32767
             @test ver.minor == 32767
         end
+    end
+end
+
+@testset "Privatization salts" begin
+    recipe(outname; privatize = true) = JuliaC.BundleRecipe(;
+        link_recipe = JuliaC.LinkRecipe(image_recipe = JuliaC.ImageRecipe(), outname = outname),
+        privatize)
+
+    @test !JuliaC.is_privatize_enabled(JuliaC.BundleRecipe())
+    @test JuliaC.is_privatize_enabled(recipe("libfoo"))
+
+    # Build directories do not affect the salt.
+    @test JuliaC.salt_for(recipe("libfoo")) == JuliaC.salt_for(recipe("libfoo"))
+    @test JuliaC.salt_for(recipe(joinpath("build", "libfoo"))) == JuliaC.salt_for(recipe(joinpath("elsewhere", "libfoo")))
+    # Product names affect the salt.
+    @test JuliaC.salt_for(recipe("libfoo")) != JuliaC.salt_for(recipe("libbar"))
+
+    derived = JuliaC.salt_for(recipe("libfoo"))
+    @test length(derived) == JuliaC.SALT_LENGTH
+    @test JuliaC.validate_salt(derived) == derived
+
+    # Project versions affect the salt.
+    project_dir = mktempdir()
+    write(joinpath(project_dir, "Project.toml"), """
+        name = "Foo"
+        uuid = "8ba89e20-285c-5b6f-9357-94700520ee1b"
+        version = "0.1.0"
+        """)
+    versioned = recipe("libfoo")
+    versioned.link_recipe.image_recipe.instantiated_project = project_dir
+    salt_v1 = JuliaC.salt_for(versioned)
+    @test salt_v1 != JuliaC.salt_for(recipe("libfoo"))
+    write(joinpath(project_dir, "Project.toml"), """
+        name = "Foo"
+        uuid = "8ba89e20-285c-5b6f-9357-94700520ee1b"
+        version = "0.2.0"
+        """)
+    @test JuliaC.salt_for(versioned) != salt_v1
+
+    # Explicit salts are preserved.
+    @test JuliaC.salt_for(recipe("libfoo"; privatize = "Ab_9")) == "Ab_9"
+    for bad in ("", "9abc", "a-b", "a b", "toolongsalt")
+        @test_throws ArgumentError JuliaC.validate_salt(bad)
+        @test_throws ArgumentError JuliaC.salt_for(recipe("libfoo"; privatize = bad))
     end
 end
 

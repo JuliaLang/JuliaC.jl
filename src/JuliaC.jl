@@ -61,7 +61,8 @@ Base.@kwdef mutable struct BundleRecipe
     link_recipe::LinkRecipe = LinkRecipe()
     output_dir::Union{String, Nothing} = nothing # if nothing, don't bundle
     libdir::String = Sys.iswindows() ? "bin" : "lib"
-    privatize::Bool = false
+    # `true` derives a salt; a `String` supplies one explicitly.
+    privatize::Union{Bool,String} = false
     bundle_lazy_artifacts::Bool = false
 end
 
@@ -81,6 +82,7 @@ export compile_products, link_products, bundle_products
 _is_name_only(s::AbstractString) = (basename(s) == s) && !isabspath(s) && !occursin('\\', s)
 
 is_trim_enabled(recipe::ImageRecipe) = recipe.trim_mode !== nothing && recipe.trim_mode != "no"
+is_privatize_enabled(recipe::BundleRecipe) = recipe.privatize !== false
 # Print CLI usage/help
 function _print_usage(io::IO=stdout)
     println(io, "juliac - compile Julia code into an executable, library, sysimage, object or bitcode")
@@ -97,7 +99,7 @@ function _print_usage(io::IO=stdout)
     println(io, "  --project <path>            Project to instantiate/precompile")
     println(io, "  --bundle <dir>              Bundle libjulia, stdlibs, and artifacts")
     println(io, "  --bundle-lazy-artifacts     Also bundle lazy artifacts (off by default)")
-    println(io, "  --privatize                 Privatize bundled libjulia (Unix)")
+    println(io, "  --privatize[=<salt>]        Privatize bundled libjulia (Unix), optionally with an explicit salt")
     println(io, "  --trim[=mode]               Strip IR/metadata (e.g. --trim=safe)")
     println(io, "  --compile-ccallable         Export ccallable entrypoints")
     println(io, "  --jl-option <key=value>     Set a Julia option using CLI syntax (supported: handle-signals=[yes/no], threads=[N])")
@@ -179,8 +181,8 @@ function _parse_cli_args(args::Vector{String})
             end
         elseif arg == "--bundle-lazy-artifacts"
             bundle_recipe.bundle_lazy_artifacts = true
-        elseif arg == "--privatize"
-            bundle_recipe.privatize = true
+        elseif arg == "--privatize" || startswith(arg, "--privatize=")
+            bundle_recipe.privatize = occursin('=', arg) ? validate_salt(split(arg, '='; limit=2)[2]) : true
         elseif arg == "--verbose"
             image_recipe.verbose = true
         elseif arg == "--quiet"

@@ -10,9 +10,9 @@ High-level steps:
 5) Remove originals. Codesigning is handled in bundling.
 """
 
-function privatize_libjulia_macos!(recipe::BundleRecipe)
+function privatize_libjulia_macos!(recipe::BundleRecipe, salt::String)
     try
-        privatize_libjulia_common!(recipe, MacOSPlatform())
+        privatize_libjulia_common!(recipe, MacOSPlatform(), salt)
     catch e
         error("Failed to privatize libjulia on macOS", e)
     end

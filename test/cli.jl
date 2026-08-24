@@ -243,6 +243,21 @@ end
     ]
     @test_throws ErrorException JuliaC._parse_cli_args(args_lazy_no_bundle)
 
+    # --privatize, with and without an explicit salt
+    priv_args(extra) = String[
+        "--output-exe", "app",
+        "--project", TEST_PROJ,
+        "--trim=safe",
+        TEST_SRC,
+        "--bundle",
+        extra,
+    ]
+    _, _, bun_priv = JuliaC._parse_cli_args(priv_args("--privatize"))
+    @test bun_priv.privatize == true
+    _, _, bun_salt = JuliaC._parse_cli_args(priv_args("--privatize=MySalt"))
+    @test bun_salt.privatize == "MySalt"
+    @test_throws ArgumentError JuliaC._parse_cli_args(priv_args("--privatize=bad-salt"))
+
     # --jl-option with space separator
     args_jlopt = String[
         "--output-lib", joinpath(mktempdir(), "mylib"),
