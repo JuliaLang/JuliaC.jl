@@ -51,6 +51,38 @@ if Sys.isunix()
     end
 end
 
+# Test type discovery directly to avoid a separate failed build for each case.
+# Use a module because `abi_export.jl` defines test structs.
+module ABITypeDiscoveryTests
+
+using Test
+
+include(joinpath(@__DIR__, "..", "src", "abi_export.jl"))
+
+struct HasNothingField
+    x::Int
+    y::Nothing
+end
+
+struct PtrWrapper{T}
+    ptr::Ptr{T}
+end
+
+@testset "ABI type discovery and Nothing/Cvoid" begin
+    msg = "representable in C only as a return type"
+    @test_throws msg recursively_add_types!(Base.IdSet{DataType}(), HasNothingField)
+    @test_throws msg recursively_add_types!(Base.IdSet{DataType}(), Tuple{Int, Nothing})
+    @test_throws msg recursively_add_types!(Base.IdSet{DataType}(), Nothing) # bare argument
+
+    types = recursively_add_types!(Base.IdSet{DataType}(), Ptr{Ptr{Cvoid}})
+    @test Ptr{Ptr{Cvoid}} in types && Ptr{Cvoid} in types && Nothing ∉ types
+
+    types = recursively_add_types!(Base.IdSet{DataType}(), PtrWrapper{Cvoid})
+    @test PtrWrapper{Cvoid} in types && Nothing ∉ types
+end
+
+end
+
 @testset "ABI export" begin
     outdir = mktempdir()
     libout = joinpath(outdir, "libsimple")
@@ -163,6 +195,9 @@ end
     ret_ptr_ptr = abi["types"][findfirst(t -> t["id"] == fn_void_ptr_ptr["returns"]["type_id"], abi["types"])::Int]
     @test ret_ptr_ptr["kind"] == "pointer"
     @test ret_ptr_ptr["pointee_type_id"] == ret_ptr["id"]
+
+    # Void is represented by a null return or pointee id, not a type node.
+    @test !any(Bool[type["name"] == "Nothing" for type in abi["types"]])
 end
 
 @testset "CLI library privatize end-to-end" begin
