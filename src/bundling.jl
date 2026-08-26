@@ -14,7 +14,7 @@ function _filter_statically_linked!(output_dir::String, image_recipe::ImageRecip
     protected = Set{String}(String(lib["dlname"]) for lib in get(inputs, "libraries", Any[])
                             if get(lib, "linkage", "") == "dynamic")
     for lib in get(inputs, "libraries", Any[])
-        get(lib, "linkage", "") in ("static", "substituted") || continue
+        get(lib, "linkage", "") in ("static", "none") || continue
         dlname = lib["dlname"]
         # Strip the platform extension to a stem, and remove the soname, its
         # symlink chain, and versioned filenames (e.g. libfoo.so,
@@ -79,21 +79,23 @@ function _patch_native_consumer_needed!(recipe::BundleRecipe)
     inputs_path = image_recipe.link_inputs_path
     (inputs_path === nothing || !isfile(inputs_path)) && return
     libs = get(TOML.parsefile(inputs_path), "libraries", Any[])
-    substituted = Set{String}(String(l["dlname"]) for l in libs
-                              if get(l, "linkage", "") == "substituted")
+    by_spec = Dict{String,Any}(String(l["package"]) * "." * String(l["product"]) => l
+                               for l in libs)
+    # Sonames a consumer may still reference, and what to do about each: a
+    # library that linked nothing names its replacement, and the rewrite
+    # follows that; one consumed as an archive has no shared form to point at.
+    replacement = Dict{String,Any}()
+    unreplaced = Set{String}()
+    for l in libs
+        get(l, "linkage", "") == "none" || continue
+        target = get(l, "replaced_with", nothing)
+        r = target isa String ? get(by_spec, target, nothing) : nothing
+        r === nothing ? push!(unreplaced, String(l["dlname"])) :
+                        (replacement[String(l["dlname"])] = r)
+    end
     consumed_static = Set{String}(String(l["dlname"]) for l in libs
                                   if get(l, "linkage", "") == "static")
-    isempty(substituted) && isempty(consumed_static) && return
-    provider = nothing
-    provider_static = false
-    for l in libs
-        get(l, "blas_provider", false) === true || continue
-        if get(l, "linkage", "") == "dynamic"
-            provider = String(l["dlname"])
-        else
-            provider_static = true
-        end
-    end
+    (isempty(replacement) && isempty(unreplaced) && isempty(consumed_static)) && return
     roots = [joinpath(recipe.output_dir, recipe.libdir),
              joinpath(recipe.output_dir, recipe.libdir, "julia")]
     for l in libs
@@ -105,13 +107,18 @@ function _patch_native_consumer_needed!(recipe::BundleRecipe)
             needed = split(read(`$(Patchelf_jll.patchelf()) --print-needed $(path)`, String))
             for n in needed
                 n = String(n)
-                if n in substituted
-                    provider === nothing &&
-                        error("--link-native: bundled $(soname) requires substituted $(n) " *
-                              "at load time" * (provider_static ?
-                              "; a statically-linked BLAS provider with dynamically-linked " *
-                              "native consumers is not yet supported" : ""))
-                    run(`$(Patchelf_jll.patchelf()) --replace-needed $(n) $(provider) $(path)`)
+                if haskey(replacement, n)
+                    target = replacement[n]
+                    get(target, "linkage", "") == "dynamic" ||
+                        error("--link-native: bundled $(soname) requires $(n) at load " *
+                              "time, which was replaced by $(target["package"]).$(target["product"]); " *
+                              "that replacement was linked statically, so there is no " *
+                              "shared library to point at (a statically-linked provider " *
+                              "with dynamically-linked native consumers is not yet supported)")
+                    run(`$(Patchelf_jll.patchelf()) --replace-needed $(n) $(String(target["dlname"])) $(path)`)
+                elseif n in unreplaced
+                    error("--link-native: bundled $(soname) requires $(n) at load time, " *
+                          "but nothing was linked in its place")
                 elseif n in consumed_static
                     error("--link-native: bundled $(soname) requires $(n) at load time, " *
                           "but that library was consumed statically; request " *
@@ -134,7 +141,7 @@ function _verify_no_dangling_needed!(recipe::BundleRecipe)
     (inputs_path === nothing || !isfile(inputs_path)) && return
     libs = get(TOML.parsefile(inputs_path), "libraries", Any[])
     removed = Set{String}(String(l["dlname"]) for l in libs
-                          if get(l, "linkage", "") in ("static", "substituted"))
+                          if get(l, "linkage", "") in ("static", "none"))
     isempty(removed) && return
     dangling = String[]
     for dir in (joinpath(recipe.output_dir, recipe.libdir),

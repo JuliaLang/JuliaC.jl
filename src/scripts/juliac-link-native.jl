@@ -6,12 +6,13 @@
 # library's dlid with the runtime's native-link policy table, and write a
 # link-inputs manifest for the driver's link step.
 #
-# The record format (jll_format 2.0) is shared with BinaryBuilder2-generated
-# JLLs; hand-written stdlib records are partial instances of the same
-# schema. Product identity (dlid) lives in a top-level name-keyed
-# [products] table; each [[builds]] block completely describes one
-# platform's shipped product set, with per-linkage tables (`dynamic`,
-# `static`) per product and an explicit `location`.
+# The record format (`format_version = "1.0"`) is shared with
+# BinaryBuilder2-generated JLLs; hand-written stdlib records are partial
+# instances of the same schema. It is the historical JLL.toml shape plus
+# four fields: `format_version` at top level, `location` per build, and
+# `linkage` + `dlid` on each library product entry. Records predating those
+# fields are read with defaults, so an unversioned JLL.toml still resolves
+# (minus native linking, which needs a dlid).
 #
 # This runs before any user code (and therefore before any ccall lowering),
 # in the target process, so record resolution sees the target project's
@@ -36,7 +37,13 @@ struct ResolvedLibrary
     linkage::String     # "static" or "dynamic"
     location::String    # "bundled" or "artifact" (where the library file lives)
     system_deps::Vector{String}
+    # For an entry with no linkage: the "Package.product" that satisfies its
+    # symbols instead (see `--link-native-blas`).
+    replaced_with::Union{String, Nothing}
 end
+ResolvedLibrary(spec, package, product, dlid, dlname, path, linkage, location, system_deps) =
+    ResolvedLibrary(spec, package, product, dlid, dlname, path, linkage, location,
+                    system_deps, nothing)
 
 # Locate a package's source directory without loading the package.
 function locate_pkgdir(pkgname::AbstractString)
@@ -57,17 +64,52 @@ function load_record(pkgname::AbstractString, record_cache::Dict{String,Any})
             error("--link-native: $pkgname has no JLL.toml record; " *
                   "only packages that ship one can be natively linked")
         record = Base.parsed_toml(record_path)
-        fmt = get(record, "jll_format", nothing)
-        ver = fmt isa AbstractString ? tryparse(VersionNumber, fmt) : nothing
-        ver isa VersionNumber && ver.major == 2 ||
-            error("--link-native: $record_path has unsupported jll_format $(repr(fmt))")
-        haskey(record, "products") ||
-            error("--link-native: $record_path declares no product identities")
+        # An absent `format_version` is a record written before the format was
+        # versioned; it is read with defaults rather than refused.
+        fmt = get(record, "format_version", nothing)
+        if fmt !== nothing
+            ver = fmt isa AbstractString ? tryparse(VersionNumber, fmt) : nothing
+            ver isa VersionNumber && ver.major == 1 ||
+                error("--link-native: $record_path has unsupported format_version $(repr(fmt))")
+        end
         haskey(record, "builds") ||
             error("--link-native: $record_path declares no builds")
+        # Identity is per product, not per entry: every entry naming a product
+        # must agree about its dlid.
+        seen_dlid = Dict{String,String}()
+        for build in record["builds"], (name, _, entry) in build_library_entries(build)
+            dlid = get(entry, "dlid", nothing)
+            dlid isa String || continue
+            prev = get(seen_dlid, name, nothing)
+            prev === nothing || prev == dlid ||
+                error("--link-native: $record_path gives $name two identities " *
+                      "($(prev) and $(dlid)); a product's dlid is platform-invariant")
+            seen_dlid[name] = dlid
+        end
         return record
     end
 end
+
+# Library product entries of a build, as (name, linkage, entry). A record
+# written before the format was versioned carries neither `type` nor
+# `linkage`, so both default: products are libraries and libraries are
+# dynamic.
+function build_library_entries(build)
+    entries = Tuple{String,String,Any}[]
+    for p in get(build, "products", Any[])
+        p isa Dict || continue
+        get(p, "type", "library") == "library" || continue
+        name = get(p, "name", nothing)
+        name isa String || continue
+        push!(entries, (name, String(get(p, "linkage", "dynamic")), p))
+    end
+    return entries
+end
+
+# Where a build's product paths resolve. Absent in a record written before
+# the field existed, where binding an artifact is what identifies one.
+build_location(b) =
+    String(get(b, "location", build_artifact_hash(b) === nothing ? "bundled" : "artifact"))
 
 # Keys of a [[builds]] block that are data rather than platform-selector
 # tags in the hand-written (tag-key) spelling.
@@ -97,7 +139,7 @@ end
 function select_build(record::Dict{String,Any}, host::AbstractPlatform)
     installed = Any[]
     for b in record["builds"]
-        get(b, "location", nothing) == "artifact" || continue
+        build_location(b) == "artifact" || continue
         hash = build_artifact_hash(b)
         hash === nothing && continue
         Artifacts.artifact_exists(hash) && push!(installed, b)
@@ -152,16 +194,10 @@ end
 function resolve_library(spec::String, pkgname::String, prodname::String,
                          record::Dict{String,Any}, host::AbstractPlatform;
                          static::Bool = false)
-    identity = get(record["products"], prodname, nothing)
-    identity === nothing &&
-        error("--link-native: $pkgname's record declares no product `$prodname`")
-    dlid = get(identity, "dlid", nothing)
-    dlid isa String ||
-        error("--link-native: $pkgname.$prodname declares no dlid")
     build = select_build(record, host)
     build === nothing &&
         error("--link-native: $pkgname's record has no build for this platform")
-    location = get(build, "location", nothing)
+    location = build_location(build)
     location in ("bundled", "artifact") ||
         error("--link-native: $pkgname's record build has unsupported location $(repr(location))")
     if location == "artifact"
@@ -177,50 +213,67 @@ function resolve_library(spec::String, pkgname::String, prodname::String,
         # installation that owns the record.
         base = bundled_shlibdir()
     end
-    product = get(get(build, "products", Dict{String,Any}()), prodname, nothing)
-    product === nothing &&
+
+    # A product may appear once per linkage; identity is shared between them.
+    dynentry = nothing
+    stentry = nothing
+    for (name, linkage, entry) in build_library_entries(build)
+        name == prodname || continue
+        if linkage == "static"
+            stentry = entry
+        elseif linkage == "dynamic"
+            dynentry = entry
+        else
+            error("--link-native: $pkgname.$prodname declares unsupported " *
+                  "linkage $(repr(linkage))")
+        end
+    end
+    (dynentry === nothing && stentry === nothing) &&
         error("--link-native: $pkgname.$prodname is not available for this platform")
-    dyngroup = get(product, "dynamic", nothing)
-    stgroup = get(product, "static", nothing)
+    dlid = get(something(dynentry, stentry), "dlid", nothing)
+    dlid isa String ||
+        error("--link-native: $pkgname.$prodname declares no dlid, so its call " *
+              "sites cannot be bound natively")
+
     if static
-        # Static linkage: link the archive declared by the `static` table. Its
+        # Static linkage: link the archive declared by the entry. Its
         # dependency edges and system-library closure come from the record,
         # because archives carry no DT_NEEDED equivalent.
-        stgroup isa Dict ||
+        stentry === nothing &&
             error("--link-native: $pkgname.$prodname has no static library for this platform")
-        relpath = get(stgroup, "path", nothing)
+        relpath = get(stentry, "path", nothing)
         relpath isa String ||
-            error("--link-native: $pkgname.$prodname's static group declares no path")
+            error("--link-native: $pkgname.$prodname's static entry declares no path")
         path = joinpath(base, relpath)
         isfile(path) ||
             error("--link-native: $pkgname.$prodname's static archive $path does not exist")
-        deps = Vector{String}(get(stgroup, "deps", String[]))
-        system_deps = Vector{String}(get(stgroup, "system_deps", String[]))
-        # The dynamic library's soname still names the shipped shared
-        # file (bundle filtering, shim configuration); a static-only product
-        # has none, so fall back to the archive name.
-        dlname = dyngroup isa Dict ?
-            something(get(dyngroup, "soname", nothing), basename(relpath)) : basename(relpath)
-        lib = ResolvedLibrary(spec, pkgname, prodname, dlid, dlname, path, "static", location, system_deps)
+        deps = Vector{String}(get(stentry, "deps", String[]))
+        system_deps = Vector{String}(get(stentry, "system_deps", String[]))
+        # The dynamic library's soname still names the shipped shared file
+        # (bundle filtering, shim configuration); a static-only product has
+        # none, so fall back to the archive name.
+        dlname = dynentry === nothing ? basename(relpath) :
+            something(get(dynentry, "soname", nothing), basename(relpath))
+        lib = ResolvedLibrary(spec, pkgname, prodname, dlid, dlname, path,
+                              "static", location, system_deps)
         return lib, deps
     else
-        if !(dyngroup isa Dict)
-            stgroup isa Dict &&
-                error("--link-native: $pkgname.$prodname has only a static library " *
-                      "for this platform; request it as `static:$pkgname.$prodname`")
-            error("--link-native: $pkgname.$prodname has no dynamic library for this platform")
+        if dynentry === nothing
+            error("--link-native: $pkgname.$prodname has only a static library " *
+                  "for this platform; request it as `static:$pkgname.$prodname`")
         end
-        soname = get(dyngroup, "soname", nothing)
+        soname = get(dynentry, "soname", nothing)
         soname isa String ||
-            error("--link-native: $pkgname.$prodname's dynamic group declares no soname")
+            error("--link-native: $pkgname.$prodname's dynamic entry declares no soname")
         # The locator defaults to the soname: the file so named in the
         # private shlibdir of the installation that owns the record (the
         # same file the package's lazy loading path opens).
-        path = joinpath(base, get(dyngroup, "path", soname))
+        path = joinpath(base, get(dynentry, "path", soname))
         isfile(path) ||
             error("--link-native: $pkgname.$prodname resolved to $path, which does not exist")
-        lib = ResolvedLibrary(spec, pkgname, prodname, dlid, soname, path, "dynamic", location, String[])
-        return lib, Vector{String}(get(dyngroup, "deps", String[]))
+        lib = ResolvedLibrary(spec, pkgname, prodname, dlid, soname, path,
+                              "dynamic", location, String[])
+        return lib, Vector{String}(get(dynentry, "deps", String[]))
     end
 end
 
@@ -272,7 +325,7 @@ function resolve_and_register!(specs::Vector{String}, link_inputs_path::String;
     function platform_products(record)
         build = select_build(record, host)
         build === nothing && return String[]
-        return collect(String, keys(get(build, "products", Dict{String,Any}())))
+        return unique(name for (name, _, _) in build_library_entries(build))
     end
 
     substituted = ResolvedLibrary[]
@@ -287,7 +340,7 @@ function resolve_and_register!(specs::Vector{String}, link_inputs_path::String;
                                      String(prodname), record, host)
             push!(substituted, ResolvedLibrary(lib.spec, lib.package, lib.product,
                                                lib.dlid, lib.dlname, nothing,
-                                               "substituted", lib.location, String[]))
+                                               "none", lib.location, String[]))
             push!(seen, (BLAS_TRAMPOLINE_PACKAGE, String(prodname)))
         end
         # The provider is an ordinary native-link request (with its closure).
@@ -336,6 +389,21 @@ function resolve_and_register!(specs::Vector{String}, link_inputs_path::String;
         end
     end
 
+    # A substituted library links nothing of its own; name what satisfies
+    # its symbols instead, so the link and bundle steps can follow the
+    # replacement without knowing why it happened.
+    if provider_bare !== nothing && !isempty(substituted)
+        idx = findfirst(l -> l.spec == provider_bare, resolved)
+        if idx !== nothing
+            target = resolved[idx].package * "." * resolved[idx].product
+            for (i, lib) in pairs(substituted)
+                substituted[i] = ResolvedLibrary(lib.spec, lib.package, lib.product,
+                                                 lib.dlid, lib.dlname, lib.path,
+                                                 lib.linkage, lib.location,
+                                                 lib.system_deps, target)
+            end
+        end
+    end
     append!(resolved, substituted)
     for lib in resolved
         ccall(:jl_add_native_link_lib_id, Cvoid, (Cstring,), lib.dlid)
@@ -356,8 +424,8 @@ function resolve_and_register!(specs::Vector{String}, link_inputs_path::String;
             println(io, "dlname = \"", esc(lib.dlname), "\"")
             println(io, "linkage = \"", esc(lib.linkage), "\"")
             println(io, "location = \"", esc(lib.location), "\"")
-            if provider_bare !== nothing && lib.spec == provider_bare
-                println(io, "blas_provider = true")
+            if lib.replaced_with !== nothing
+                println(io, "replaced_with = \"", esc(lib.replaced_with), "\"")
             end
             if lib.path !== nothing
                 println(io, "path = \"", esc(lib.path), "\"")

@@ -104,7 +104,7 @@ function native_link_args(recipe::LinkRecipe)
         # symbols satisfied by other link inputs (e.g. libblastrampoline
         # under --link-native-blas).
         haskey(lib, "path") || continue
-        if get(lib, "linkage", "dynamic") == "static"
+        if get(lib, "linkage", "") == "static"
             push!(static_paths, lib["path"])
             append!(system_deps, get(lib, "system_deps", String[]))
         else
