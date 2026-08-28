@@ -223,3 +223,24 @@ end
 @eval Base.CoreLogging begin
     @inline current_logger_for_env(std_level::LogLevel, group, _module) = nothing
 end
+
+@eval Base.Libc.Libdl begin
+    @noinline _throw_unsupported_path_piece(@nospecialize(p)) = error(
+        "LazyLibraryPath path segment of type `", typeof(p).name.name,
+        "` is not supported under --trim; pieces must be String, ",
+        "SubString{String}, or PrivateShlibdirGetter"
+    )
+
+    function Base.string(llp::LazyLibraryPath)
+        n = nfields(llp.pieces)
+        parts = Vector{String}(undef, n)
+        for i in 1:n
+            p = getfield(llp.pieces, i)
+            parts[i] = p isa String                ? p :
+                       p isa SubString{String}     ? String(p) :
+                       p isa PrivateShlibdirGetter ? string(p) :
+                       _throw_unsupported_path_piece(p)
+        end
+        return joinpath(parts)
+    end
+end
