@@ -1,18 +1,15 @@
-"""
-Windows privatization for libjulia: pin the built product to the `libjulia*.dll` copies
-bundled beside it. PE carries no SONAME, symbol versioning, or DT_NEEDED for
-`privatize_libjulia_common!` to salt-rename, so privatization here is two PE-level edits:
-
-1. Inject an SxS private-assembly `RT_MANIFEST` resource into the product (`.exe`/`.dll`).
-   Its `<file>` entries list the bundled `libjulia*.dll` siblings, creating an activation
-   context under which the loader prefers the product's own directory over any same-named
-   DLL already on `PATH`. See `inject_private_manifest!`.
-2. Salt the bundled `libjulia.dll`'s embedded dependency-list entries for `libjulia*.dll`
-   files the bundle omits, so they resolve nowhere. See `fix_libjulia_libpath!`.
-
-This file stands alone: it drives both edits itself, using neither `PrivatizePlatform` /
-the `plat_*` hooks nor `privatize_libjulia_common!`.
-"""
+# Windows privatization for libjulia: pin the built product to the `libjulia*.dll` copies
+# bundled beside it, with two PE-level edits driven directly from this file.
+#
+# 1. `inject_private_manifest!` gives the product an SxS private-assembly `RT_MANIFEST`
+#    resource whose `<file>` entries name the bundled `libjulia*.dll` siblings. The loader
+#    resolves those names from the product's own directory, ahead of any same-named DLL
+#    on `PATH`.
+# 2. `fix_libjulia_libpath!` salts the bundled `libjulia.dll`'s dependency-list entries for
+#    the `libjulia*.dll` files the bundle omits, so they resolve nowhere.
+#
+# PE carries no SONAME, symbol versioning, or DT_NEEDED, so the salt-renaming that
+# `privatize_libjulia_common!` performs on Linux and macOS has nothing to act on here.
 
 using ObjectFile
 using StructIO
@@ -22,10 +19,10 @@ import ObjectFile: COFF, Sections, section_address, section_offset, findfirst
 # after JuliaC itself is bundled.
 const TEMPLATE_DIR = @path joinpath(@__DIR__, "template")
 
-# Byte offsets from the start of the .rsrc section, where rsrc.bin puts its
+# Byte offsets from the start of the .rsrc section; rsrc.bin puts its
 # IMAGE_RESOURCE_DATA_ENTRY at 0x48.
-const MANIFEST_ADDRESS_OFFSET = UInt(0x48)  # IMAGE_RESOURCE_DATA_ENTRY.OffsetToData
-const MANIFEST_SIZE_OFFSET    = UInt(0x4c)  # IMAGE_RESOURCE_DATA_ENTRY.Size
+const MANIFEST_ADDRESS_OFFSET = UInt(0x48)  # .OffsetToData
+const MANIFEST_SIZE_OFFSET    = UInt(0x4c)  # .Size
 
 """
     generate_manifest_xml(identity_name, dll_names) -> Vector{UInt8}
@@ -45,15 +42,15 @@ function generate_manifest_xml(identity_name::AbstractString, dll_names)
     return Vector{UInt8}(String(take!(io)))
 end
 
-# Each product claims its own entry in the SxS assembly cache: the identity is its basename
-# plus the salt, reduced to name-safe characters.
+# Each product needs its own entry in the SxS assembly cache, so the identity carries both
+# the product basename and the salt.
 function manifest_identity_for(product_path::AbstractString, salt::AbstractString)
-    stem = first(splitext(basename(product_path)))      # strip .exe/.dll
+    stem = first(splitext(basename(product_path)))
     safe = replace(stem, r"[^A-Za-z0-9._-]" => "_")
     return string("JuliaC.PrivateRuntime.", safe, ".", salt)
 end
 
-# The libjulia DLLs the manifest may redirect, in canonical order.
+# The libjulia DLLs the manifest may redirect.
 const LIBJULIA_DLL_CANDIDATES =
     ("libjulia.dll", "libjulia-internal.dll", "libjulia-codegen.dll")
 
@@ -61,9 +58,11 @@ const LIBJULIA_DLL_CANDIDATES =
     next_free_section_vma(product_path) -> UInt64
 
 Return the virtual address at which a new section can be appended to the PE at
-`product_path`: the image base plus the end of the last section's virtual extent, rounded up
-to `SectionAlignment`. Sections must be listed in ascending RVA order and lie inside
-`SizeOfImage`, so a new section has to go past every existing one.
+`product_path`: the image base plus the end of the last section's virtual extent, rounded
+up to `SectionAlignment`.
+
+Past the last section is the only free spot: the section table must stay in ascending RVA
+order and inside `SizeOfImage`.
 """
 function next_free_section_vma(product_path)
     open(product_path) do io
@@ -106,12 +105,10 @@ function inject_private_manifest!(product_path, dll_names, salt::AbstractString)
         end
     end
 
-    # `--change-section-address` is mandatory. objcopy gives a newly added section a VMA of 0,
-    # below the image base mingw's `--enable-auto-image-base` assigns these products; it then
-    # warns "section below image base", exits 0 anyway, and leaves an RVA outside
-    # `SizeOfImage` that the loader rejects with ERROR_BAD_EXE_FORMAT ("%1 is not a valid
-    # Win32 application"). The first free VA past the last section keeps the section table in
-    # ascending RVA order and lets objcopy grow `SizeOfImage` to cover it.
+    # `--change-section-address` is mandatory: objcopy defaults a new section to VMA 0, below
+    # the image base, warns "section below image base", exits 0 anyway, and leaves an RVA
+    # outside `SizeOfImage` that the loader rejects with ERROR_BAD_EXE_FORMAT ("%1 is not a
+    # valid Win32 application").
     objcopy = mingw_tool("objcopy.exe")
     rsrc_vma = next_free_section_vma(product_path)
     run(`$objcopy --add-section .rsrc=$sectionfile --set-section-flags .rsrc=data --change-section-address .rsrc=$(rsrc_vma) $product_path`)
@@ -121,8 +118,8 @@ function inject_private_manifest!(product_path, dll_names, salt::AbstractString)
         oh = only(ObjectFile.readmeta(io))
         rsrc_section = findfirst(Sections(oh), ".rsrc")
         rsrc_section === nothing && error("objcopy did not create a .rsrc section in $product_path")
-        # objcopy reports a bad placement as a stderr warning and still exits 0, so confirm it
-        # honored the requested address before trusting the section's RVA below.
+        # objcopy only warns about a bad placement, so confirm the address before trusting
+        # the section's RVA below.
         placed_vma = UInt64(oh.opt_header.windows.ImageBase) + UInt64(section_address(rsrc_section))
         placed_vma == rsrc_vma || error("objcopy placed .rsrc at $(repr(placed_vma)), expected $(repr(rsrc_vma)) in $product_path")
 
@@ -142,8 +139,8 @@ function inject_private_manifest!(product_path, dll_names, salt::AbstractString)
             #= Size          =# rsrc_section.section.VirtualSize,
         ))
 
-        # rsrc.bin cannot carry OffsetToData: it is an RVA, known only once objcopy has
-        # placed the section.
+        # OffsetToData is an RVA, known only once objcopy has placed the section, so
+        # rsrc.bin ships without it and it is patched in here.
         seek(oh, section_offset(rsrc_section) + MANIFEST_ADDRESS_OFFSET)
         write(ObjectFile.handle(oh).io, UInt32(section_address(rsrc_section) + sizeof(header)))
         seek(oh, section_offset(rsrc_section) + MANIFEST_SIZE_OFFSET)
@@ -155,18 +152,16 @@ end
 """
     fix_libjulia_libpath!(libjulia_path, present_dlls, salt)
 
-Keep the bundled `libjulia.dll` on its own codegen fallback stubs (`codegen-stubs.c`) for
-every `libjulia*.dll` the bundle omits, by rewriting the loader's embedded, colon-separated,
-NUL-terminated dependency list in place: each entry naming a DLL outside `present_dlls` (see
-`present_libjulia_dlls`) becomes a salted name that resolves nowhere.
+Salt the dependency-list entries embedded in the bundled `libjulia.dll`: every
+`libjulia*.dll` outside `present_dlls` (see `present_libjulia_dlls`) becomes a name that
+resolves nowhere, keeping the runtime on its codegen fallback stubs (`codegen-stubs.c`).
 
-- A bare-name `LoadLibrary` matches already-loaded modules by basename, so inside a process
-  that already hosts Julia an omitted DLL resolves to the *host's* copy. An unresolvable
-  name keeps the fallback path.
-- Under `--trim`, `remove_unnecessary_libraries` drops `libjulia-codegen.dll`; that is the
-  entry this normally rewrites.
-- The replacement is the same length as the name it replaces, so every other byte of the
-  loader stays put; a length change raises an error.
+The salting matters because a bare-name `LoadLibrary` matches already-loaded modules by
+basename: in a process that already hosts Julia, an omitted DLL would bind the *host's*
+copy. Under `--trim` the omitted DLL is `libjulia-codegen.dll`, dropped by
+`remove_unnecessary_libraries`.
+
+The rewrite is in place and length-preserving; a length change raises an error.
 """
 function fix_libjulia_libpath!(libjulia_path, present_dlls::Vector{String}, salt::AbstractString)
     if !isfile(libjulia_path)
@@ -201,9 +196,24 @@ function present_libjulia_dlls(bindir)
 end
 
 """
-Windows arm of `privatize_libjulia!`: inject the SxS manifest into the built product
-(`inject_private_manifest!`) and salt the bundled `libjulia.dll`'s embedded dependency list
-(`fix_libjulia_libpath!`).
+    present_libllvm_dlls(bindir) -> Vector{String}
+
+The bundled `libLLVM-*.dll`, if any (its name carries the LLVM major version; trimmed
+bundles ship none). The manifest must redirect it alongside the libjulia DLLs: LLVM keeps
+its registered-module set in libLLVM's own data segment, so a private `libjulia-codegen`
+bound to the host's libLLVM shares that set with the host runtime, and Julia >= 1.14
+(JuliaLang/julia#60988) aborts in `JuliaOJIT`'s constructor on the resulting duplicate
+registration ("unable to dlopen libjulia dependency / Library already loaded").
+"""
+function present_libllvm_dlls(bindir)
+    isdir(bindir) || return String[]
+    return sort!([f for f in readdir(bindir)
+                  if startswith(f, "libLLVM") && endswith(f, ".dll")])
+end
+
+"""
+Windows arm of `privatize_libjulia!`: apply both PE-level edits described at the top of this
+file to the bundle in `recipe`.
 """
 function privatize_libjulia_windows!(recipe::BundleRecipe, salt::String)
     try
@@ -215,7 +225,9 @@ function privatize_libjulia_windows!(recipe::BundleRecipe, salt::String)
         dll_names = present_libjulia_dlls(bindir)
         isempty(dll_names) && error("no libjulia*.dll found in $bindir to privatize")
 
-        inject_private_manifest!(product, dll_names, salt)
+        # libLLVM must be redirected too (see `present_libllvm_dlls`), but stays out of
+        # `dll_names`: `fix_libjulia_libpath!` rewrites only `libjulia*` dep-list entries.
+        inject_private_manifest!(product, vcat(dll_names, present_libllvm_dlls(bindir)), salt)
         fix_libjulia_libpath!(libjulia, dll_names, salt)
     catch e
         error("Failed to privatize libjulia on Windows", e)

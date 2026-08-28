@@ -39,9 +39,10 @@ function get_rpath(recipe::LinkRecipe)
 end
 
 # bin/ directory of the bundled mingw-w64 toolchain (winlibs GCC distribution), which ships
-# gcc and the binutils suite (objcopy, windres, dlltool, …) together. Windows-specific: the
-# artifact is os="windows"-gated, so `@static` keeps the `@artifact_str` expansion — which
-# would fail to resolve — off other platforms.
+# gcc and the binutils suite (objcopy, windres, dlltool, …) together.
+#
+# `@static` is load-bearing: the artifact is gated on os="windows", so the `@artifact_str`
+# expansion would fail to resolve on other platforms.
 function mingw_bindir()
     @static if Sys.iswindows()
         return joinpath(LazyArtifacts.artifact"mingw-w64",
@@ -157,6 +158,14 @@ function link_products(recipe::LinkRecipe)
             cmd2 = `$cmd2 -latomic`
             # On 32-bit x86, float math (e.g. floorf) can become a libcall to libm
             cmd2 = `$cmd2 -lm`
+            if Sys.iswindows()
+                # 64-bit integer division lowers to libgcc helper calls. Left dynamic, they
+                # import libgcc_s_dw2-1.dll (this toolchain's DWARF-EH runtime), which
+                # Julia's SJLJ-based i686 build never ships — the product then fails to load
+                # with ERROR_MOD_NOT_FOUND. x86_64 needs no flag: its helpers resolve via
+                # libgcc_s_seh-1.dll, which Julia ships.
+                cmd2 = `$cmd2 -static-libgcc`
+            end
         end
         # Platform-specific linker flags
         lib_name = basename(recipe.outname)

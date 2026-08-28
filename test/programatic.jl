@@ -279,7 +279,7 @@
             product = joinpath(outdir, "bin", libname * "." * Base.BinaryPlatforms.platform_dlext())
             @test isfile(product)
 
-            # (a) The product PE now has a .rsrc section (read via ObjectFile, already a dep).
+            # (a) The product PE now has a .rsrc section.
             rsrc_va = open(product) do io
                 oh = only(JuliaC.ObjectFile.readmeta(io))
                 rsrc = JuliaC.ObjectFile.findfirst(JuliaC.ObjectFile.Sections(oh), ".rsrc")
@@ -287,9 +287,8 @@
                 rsrc === nothing ? UInt32(0) : UInt32(JuliaC.ObjectFile.section_address(rsrc))
             end
 
-            # (b) The optional header's ResourceTable data directory now points at .rsrc.
-            #     Read via raw seek/read (not ObjectFile) to independently confirm the COFF
-            #     patch landed.
+            # (b) The optional header's ResourceTable data directory now points at .rsrc;
+            #     the raw seek/read gives an independent check that the COFF patch landed.
             rt = open(product) do io
                 seek(io, 0x3C); pe_off = read(io, UInt32)
                 opt_hdr = pe_off + 4 + 20                 # PE sig (4) + COFF header (20)
@@ -304,9 +303,8 @@
             @test rt.va != 0
             @test rt.size != 0
 
-            # (c) The bundled loader's dependency list is intact. This bundle is trimmed, so
-            #     its entry for the unshipped libjulia-codegen.dll is neutralized to a salted
-            #     name that can never bind a host's loaded copy.
+            # (c) The bundled loader's dependency list survives, with the entry for the
+            #     unshipped libjulia-codegen.dll salted away (this bundle is trimmed).
             libjulia = joinpath(outdir, "bin", "libjulia.dll")
             @test isfile(libjulia)
             loaderbytes = String(read(libjulia))
@@ -316,12 +314,10 @@
     end
 
     @testset "Privatized library loads its own runtime copy (Windows)" begin
-        # Asserts that dlopen'ing the product from a live Julia session makes each bundled
-        # runtime DLL appear twice in Libdl.dllist(): the host Julia's copy and the bundle's
-        # own. See src/privatize_windows.jl for the SxS manifest mechanism this exercises.
-        #
-        # Built WITHOUT --trim so all three runtime DLLs, codegen included, are bundled and
-        # must each show up twice; the trimmed case is covered by the testset below.
+        # dlopen'ing the product from a live Julia session must leave each bundled runtime
+        # DLL listed twice in Libdl.dllist(): the host's copy and the bundle's private one,
+        # via the SxS manifest in src/privatize_windows.jl. Built without --trim, so all
+        # three runtime DLLs ship; the trimmed case is the testset below.
         if Sys.iswindows()
             img_untrimmed = JuliaC.ImageRecipe(
                 file = TEST_LIB_SRC,
@@ -344,9 +340,11 @@
             @test isfile(product)
 
             # The runtime DLLs the manifest redirects; each must end up loaded twice.
-            bundled = JuliaC.present_libjulia_dlls(bindir)
+            # libLLVM is included: see `JuliaC.present_libllvm_dlls`.
+            bundled = vcat(JuliaC.present_libjulia_dlls(bindir), JuliaC.present_libllvm_dlls(bindir))
             @test "libjulia.dll" in bundled
             @test "libjulia-codegen.dll" in bundled
+            @test any(startswith("libLLVM"), bundled)
 
             # Load the product from a fresh Julia process (which already has its own runtime
             # resident) and report dllist() before and after. Markers flush to stderr
@@ -354,7 +352,9 @@
             snippet = """
                 using Libdl
                 errln(s) = (println(stderr, s); flush(stderr))
-                juliadlls() = filter(p -> startswith(lowercase(basename(p)), "libjulia"), Libdl.dllist())
+                juliadlls() = filter(Libdl.dllist()) do p
+                    b = lowercase(basename(p)); startswith(b, "libjulia") || startswith(b, "libllvm-")
+                end
                 errln("M1_PRE_DLOPEN n=" * string(length(juliadlls())))
                 h = Libdl.dlopen($(repr(product)), Libdl.RTLD_LOCAL)
                 errln("M2_POST_DLOPEN n=" * string(length(juliadlls())))
@@ -369,8 +369,7 @@
             logf = joinpath(outdir, "winload.log")
             proc = run(pipeline(`$(Base.julia_cmd()) --startup-file=no --history-file=no -e $snippet`;
                                 stdout=logf, stderr=logf); wait=false)
-            # Watchdog: kills the process after 180s so a loader deadlock cannot stall the
-            # whole CI job.
+            # A loader deadlock must not stall the CI job.
             watchdog = Timer(180) do _
                 Base.process_running(proc) && (kill(proc); @warn "Windows load test exceeded 180s; killed")
             end
@@ -385,7 +384,6 @@
             # The exported symbol resolves and runs through the privatized runtime.
             @test occursin("RESULT=42", out)
 
-            # Group the reported runtime DLLs by filename -> set of directories holding them.
             dirs_by_dll = Dict{String,Set{String}}()
             for m in eachmatch(r"^DLL=([^|]+)\|(.+)$"m, out)
                 push!(get!(Set{String}, dirs_by_dll, m.captures[1]), rstrip(m.captures[2]))
@@ -395,20 +393,18 @@
             bundled_dir = lowercase(abspath(bindir))
             for dll in bundled
                 dirs = get(dirs_by_dll, lowercase(dll), Set{String}())
-                # Two copies: the host Julia's, and the product's own private one.
+                # The bundle's private copy alongside the host's pre-existing one.
                 @test length(dirs) >= 2
                 @test bundled_dir in dirs
-                # At least one copy is not ours: the host's pre-existing one.
                 @test any(!=(bundled_dir), dirs)
             end
         end
     end
 
     @testset "Trimmed privatized library falls back to codegen stubs (Windows)" begin
-        # `remove_unnecessary_libraries` strips libjulia-codegen.dll from a trimmed bundle,
-        # so privatization salts the loader's codegen entry to an unresolvable name: the load
-        # fails cleanly and the runtime falls back to its built-in codegen stubs. Binding the
-        # host's already-loaded codegen via a bare-name LoadLibrary aborts the process in
+        # A trimmed bundle ships no libjulia-codegen.dll, so `fix_libjulia_libpath!` salts
+        # the loader's codegen entry and the runtime uses its built-in codegen stubs.
+        # The hazard: binding the host's already-loaded codegen by bare name aborts in
         # jl_init_llvm ("Library already loaded").
         if Sys.iswindows()
             outdir = mktempdir()
