@@ -288,9 +288,8 @@
             end
 
             # (b) The optional header's ResourceTable data directory now points at .rsrc.
-            #     Read it with raw seek/read to mirror the ld_flags testset's style and to
-            #     independently confirm the COFF patch landed (datadirs_offset reasoning
-            #     verified against a real PE during planning).
+            #     Read via raw seek/read (not ObjectFile) to independently confirm the COFF
+            #     patch landed.
             rt = open(product) do io
                 seek(io, 0x3C); pe_off = read(io, UInt32)
                 opt_hdr = pe_off + 4 + 20                 # PE sig (4) + COFF header (20)
@@ -305,9 +304,9 @@
             @test rt.va != 0
             @test rt.size != 0
 
-            # (c) The bundled loader's dependency list is intact, and — this bundle being
-            #     trimmed — its entry for the unshipped libjulia-codegen.dll has been
-            #     neutralized to a salted name so it can never bind a host's loaded copy.
+            # (c) The bundled loader's dependency list is intact. This bundle is trimmed, so
+            #     its entry for the unshipped libjulia-codegen.dll is neutralized to a salted
+            #     name that can never bind a host's loaded copy.
             libjulia = joinpath(outdir, "bin", "libjulia.dll")
             @test isfile(libjulia)
             loaderbytes = String(read(libjulia))
@@ -317,16 +316,12 @@
     end
 
     @testset "Privatized library loads its own runtime copy (Windows)" begin
-        # The point of the SxS manifest: when the product is loaded into a process that
-        # already has a Julia runtime resident, it must bind its *own* sibling libjulia*.dll
-        # copies rather than silently reusing the same-named modules already loaded. Proven
-        # here by dlopen'ing the product from a live Julia session and checking that
-        # Libdl.dllist() then reports two copies of every bundled runtime DLL: one under the
-        # host Julia's libdir, one under the bundle's bin/.
+        # Asserts that dlopen'ing the product from a live Julia session makes each bundled
+        # runtime DLL appear twice in Libdl.dllist(): the host Julia's copy and the bundle's
+        # own. See src/privatize_windows.jl for the SxS manifest mechanism this exercises.
         #
-        # Deliberately built WITHOUT --trim so all three runtime DLLs (codegen included) are
-        # bundled and must each show up twice. The trimmed case, where codegen is absent and
-        # the loader must fall back to its codegen stubs, is covered by the testset below.
+        # Built WITHOUT --trim so all three runtime DLLs, codegen included, are bundled and
+        # must each show up twice; the trimmed case is covered by the testset below.
         if Sys.iswindows()
             img_untrimmed = JuliaC.ImageRecipe(
                 file = TEST_LIB_SRC,
@@ -351,11 +346,11 @@
             # The runtime DLLs the manifest redirects; each must end up loaded twice.
             bundled = JuliaC.present_libjulia_dlls(bindir)
             @test "libjulia.dll" in bundled
-            @test "libjulia-codegen.dll" in bundled  # untrimmed, so codegen is bundled
+            @test "libjulia-codegen.dll" in bundled
 
-            # Load the product from a fresh Julia process, which already has its own runtime
-            # resident, and report dllist() before and after. Markers are flushed to stderr as
-            # they happen so a loader deadlock still leaves evidence of how far it got.
+            # Load the product from a fresh Julia process (which already has its own runtime
+            # resident) and report dllist() before and after. Markers flush to stderr
+            # immediately, so a deadlock still leaves evidence of how far it got.
             snippet = """
                 using Libdl
                 errln(s) = (println(stderr, s); flush(stderr))
@@ -374,7 +369,8 @@
             logf = joinpath(outdir, "winload.log")
             proc = run(pipeline(`$(Base.julia_cmd()) --startup-file=no --history-file=no -e $snippet`;
                                 stdout=logf, stderr=logf); wait=false)
-            # Watchdog: a loader deadlock here would otherwise run until the CI job limit.
+            # Watchdog: kills the process after 180s so a loader deadlock cannot stall the
+            # whole CI job.
             watchdog = Timer(180) do _
                 Base.process_running(proc) && (kill(proc); @warn "Windows load test exceeded 180s; killed")
             end
@@ -402,19 +398,18 @@
                 # Two copies: the host Julia's, and the product's own private one.
                 @test length(dirs) >= 2
                 @test bundled_dir in dirs
-                # ...and at least one copy that is *not* ours, i.e. the host's pre-existing one.
+                # At least one copy is not ours: the host's pre-existing one.
                 @test any(!=(bundled_dir), dirs)
             end
         end
     end
 
     @testset "Trimmed privatized library falls back to codegen stubs (Windows)" begin
-        # A trimmed bundle ships no libjulia-codegen.dll (`remove_unnecessary_libraries`
-        # strips it), so privatization neutralizes the loader's codegen entry instead:
-        # renamed to a salted name that cannot resolve, the load fails cleanly and the
-        # private runtime uses its built-in codegen fallback stubs. It must NOT bind the
-        # host's already-loaded codegen — a bare-name LoadLibrary would otherwise match it
-        # and the process aborts in jl_init_llvm ("Library already loaded").
+        # `remove_unnecessary_libraries` strips libjulia-codegen.dll from a trimmed bundle,
+        # so privatization salts the loader's codegen entry to an unresolvable name: the load
+        # fails cleanly and the runtime falls back to its built-in codegen stubs. Binding the
+        # host's already-loaded codegen via a bare-name LoadLibrary aborts the process in
+        # jl_init_llvm ("Library already loaded").
         if Sys.iswindows()
             outdir = mktempdir()
             libname = "libwinprivtrimtest"

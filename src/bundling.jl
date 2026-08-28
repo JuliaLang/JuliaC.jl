@@ -80,7 +80,7 @@ function bundle_products(recipe::BundleRecipe)
     # Perform library removal operations
     remove_unnecessary_libraries(recipe)
 
-    # Optional privatization of libjulia: single entry point dispatching per-OS (disabled by default)
+    # Opt-in, via `--privatize`.
     if is_privatize_enabled(recipe)
         privatize_libjulia!(recipe)
     end
