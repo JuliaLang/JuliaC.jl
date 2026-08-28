@@ -225,6 +225,12 @@ end
 end
 
 @eval Base.Libc.Libdl begin
+    @noinline _invoke_on_load_callback(@nospecialize(cb)) = error(
+        "LazyLibrary on_load_callback of type `", typeof(cb).name.name,
+        "` is not supported under --trim; register a C entry point via ",
+        "_on_load_c_callback instead"
+    )
+
     @noinline _throw_unsupported_path_piece(@nospecialize(p)) = error(
         "LazyLibraryPath path segment of type `", typeof(p).name.name,
         "` is not supported under --trim; pieces must be String, ",
