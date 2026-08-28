@@ -223,3 +223,36 @@ end
 @eval Base.CoreLogging begin
     @inline current_logger_for_env(std_level::LogLevel, group, _module) = nothing
 end
+
+# `Base.string(::LazyLibraryPath)` joins an untyped tuple of path pieces through the
+# documented `string(p)` protocol, which is a dynamic call and so cannot be verified
+# under `--trim`. Base keeps that protocol, since restricting it would be a
+# backwards-incompatible change to a public type; the closed world narrows it here
+# instead, to the piece types stdlib JLLs actually use.
+@static if isdefined(Base.Libc.Libdl, :PrivateShlibdirGetter)
+    @eval Base.Libc.Libdl begin
+        # The type is named through `typeof(p).name.name`, not by printing the type
+        # itself: `typeof` of a value is always a concrete `DataType`, so that field
+        # chain is statically typed down to a `Symbol` and printing it resolves by
+        # concrete dispatch. Interpolating the type object instead would print an
+        # `Any`-typed value (`print(::IOBuffer, ::Any)`), a dynamic call that would
+        # reintroduce the very trim error this override exists to remove.
+        @noinline _throw_unsupported_path_piece(@nospecialize(p)) = error(
+            "LazyLibraryPath piece of type `", typeof(p).name.name,
+            "` is not supported under --trim; pieces must be String, ",
+            "SubString{String}, or PrivateShlibdirGetter")
+
+        function Base.string(llp::LazyLibraryPath)
+            n = nfields(llp.pieces)
+            parts = Vector{String}(undef, n)
+            for i in 1:n
+                p = getfield(llp.pieces, i)
+                parts[i] = p isa String                ? p :
+                           p isa SubString{String}     ? String(p) :
+                           p isa PrivateShlibdirGetter ? private_shlibdir() :
+                           _throw_unsupported_path_piece(p)
+            end
+            return joinpath(parts)
+        end
+    end
+end
