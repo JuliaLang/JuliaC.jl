@@ -57,6 +57,28 @@ const LIBJULIA_DLL_CANDIDATES =
     ("libjulia.dll", "libjulia-internal.dll", "libjulia-codegen.dll")
 
 """
+    next_free_section_vma(product_path) -> UInt64
+
+Return the virtual address at which a new section can be appended to the PE at
+`product_path`: the image base plus the end of the last section's virtual extent, rounded up
+to `SectionAlignment`. Sections must be listed in ascending RVA order and lie inside
+`SizeOfImage`, so a new section has to go past every existing one.
+"""
+function next_free_section_vma(product_path)
+    open(product_path) do io
+        oh = only(ObjectFile.readmeta(io))
+        win = oh.opt_header.windows
+        align = UInt64(win.SectionAlignment)
+        last_rva = UInt64(0)
+        for section in Sections(oh)
+            last_rva = max(last_rva,
+                           UInt64(section_address(section)) + UInt64(section.section.VirtualSize))
+        end
+        return UInt64(win.ImageBase) + cld(last_rva, align) * align
+    end
+end
+
+"""
     inject_private_manifest!(product_path, dll_names, salt)
 
 Add the SxS `RT_MANIFEST` resource (listing `dll_names`) to the PE at `product_path`:
@@ -80,8 +102,15 @@ function inject_private_manifest!(product_path, dll_names, salt::AbstractString)
     end
 
     # Add the section using objcopy from the mingw artifact already used for linking.
+    # `--change-section-address` is mandatory: objcopy defaults a newly added section's VMA
+    # to 0, which is *below* the image base mingw's `--enable-auto-image-base` assigns to
+    # these products. objcopy then warns "section below image base" and stores a nonsense
+    # RVA outside SizeOfImage, and the loader rejects the file with ERROR_BAD_EXE_FORMAT
+    # ("%1 is not a valid Win32 application"). Placing it at the first free VA past the last
+    # section keeps the section table RVA-ordered and lets objcopy grow SizeOfImage for us.
     objcopy = mingw_tool("objcopy.exe")            # WINDOWS-CI-ONLY: artifact + run
-    run(`$objcopy --add-section .rsrc=$sectionfile --set-section-flags .rsrc=data $product_path`)
+    rsrc_vma = next_free_section_vma(product_path)
+    run(`$objcopy --add-section .rsrc=$sectionfile --set-section-flags .rsrc=data --change-section-address .rsrc=$(rsrc_vma) $product_path`)
     rm(sectionfile)
 
     # Re-open and patch the headers now that objcopy has placed the section.
@@ -89,6 +118,10 @@ function inject_private_manifest!(product_path, dll_names, salt::AbstractString)
         oh = only(ObjectFile.readmeta(io))
         rsrc_section = findfirst(Sections(oh), ".rsrc")
         rsrc_section === nothing && error("objcopy did not create a .rsrc section in $product_path")
+        # objcopy signals a bad placement only as a stderr warning with exit 0, so verify it
+        # actually honored the requested address before trusting the section's RVA below.
+        placed_vma = UInt64(oh.opt_header.windows.ImageBase) + UInt64(section_address(rsrc_section))
+        placed_vma == rsrc_vma || error("objcopy placed .rsrc at $(repr(placed_vma)), expected $(repr(rsrc_vma)) in $product_path")
 
         # 1) Patch the optional header's ResourceTable data directory.
         magic = oh.opt_header.standard.Magic
@@ -117,36 +150,46 @@ function inject_private_manifest!(product_path, dll_names, salt::AbstractString)
 end
 
 """
-    fix_libjulia_libpath!(libjulia_path)
+    fix_libjulia_libpath!(libjulia_path, present_dlls, salt)
 
-Strip the stale `../bin/` prefix from the bundled `libjulia.dll`'s embedded, colon-separated
-library search path (rewriting `@../bin/` -> `@`), in place, NUL-terminated. The rewrite only
-removes bytes, so it never grows the string and is safe to do in place.
+Rewrite the bundled `libjulia.dll` loader's embedded, colon-separated, NUL-terminated
+dependency list in place so that any `libjulia*.dll` entry whose file is not shipped in the
+bundle (e.g. `libjulia-codegen.dll` under `--trim`, removed by
+`remove_unnecessary_libraries`) is renamed to a salted, same-length name that cannot resolve.
+
+A bare-name `LoadLibrary` on Windows matches already-loaded modules by basename, so when the
+product is loaded into a process that already hosts Julia the loader would otherwise bind the
+*host's* copy of a DLL we didn't ship instead of failing cleanly into its codegen fallback
+stubs (`codegen-stubs.c`). Renaming the entry to something unresolvable mirrors what the
+salted SONAME/install-name rewrite achieves on Linux/macOS. Same-length replacement is
+enforced so no other byte of the loader moves.
 """
-function fix_libjulia_libpath!(libjulia_path)
+function fix_libjulia_libpath!(libjulia_path, present_dlls::Vector{String}, salt::AbstractString)
     if !isfile(libjulia_path)
         error("Unable to open libjulia.dll at $(libjulia_path)")
     end
-    open(libjulia_path; read = true, write = true) do io
-        needle = "../bin/"
-        readuntil(io, needle)
-        skip(io, -length(needle))
-        libpath_offset = position(io)
-
-        libpath = split(String(readuntil(io, UInt8(0))), ":")
-        libpath = map(libpath) do l
-            if startswith(l, "../bin/")
-                return l[8:end]
-            elseif startswith(l, "@../bin/")
-                return "@" * l[9:end]
-            end
-            return l
+    data = read(libjulia_path)
+    # Anchor on the one entry every Julia ships; the list looks like
+    # "libgcc_s_seh-1.dll:libopenlibm.dll:@:@libjulia-internal.dll:@libjulia-codegen.dll:\0"
+    # where a leading `@` means "relative to the loader's own directory".
+    anchor = findfirst(codeunits("@libjulia-internal.dll:"), data)
+    anchor === nothing && error("could not locate the embedded dependency list in $(libjulia_path)")
+    lo = something(findprev(iszero, data, first(anchor)), 0) + 1
+    hi = something(findnext(iszero, data, first(anchor)), lastindex(data) + 1) - 1
+    entries = map(split(String(data[lo:hi]), ':')) do l
+        at, name = startswith(l, "@") ? ("@", String(l[2:end])) : ("", String(l))
+        if startswith(name, "libjulia") && endswith(name, ".dll") && !(name in present_dlls)
+            stem = name[1:end-4]
+            name = rpad(first(salt, length(stem)), length(stem), '_') * ".dll"
         end
-
-        seek(io, libpath_offset)
-        write(io, join(libpath, ":"))
-        write(io, UInt8(0))
+        at * name
     end
+    newlist = join(entries, ':')
+    ncodeunits(newlist) == hi - lo + 1 ||
+        error("dependency list rewrite changed its length in $(libjulia_path)")
+    data[lo:hi] = codeunits(newlist)
+    write(libjulia_path, data)
+    return nothing
 end
 
 # The libjulia DLLs actually present in the bundle bin/ dir, in canonical order.
@@ -169,7 +212,7 @@ function privatize_libjulia_windows!(recipe::BundleRecipe, salt::String)
         isempty(dll_names) && error("no libjulia*.dll found in $bindir to privatize")
 
         inject_private_manifest!(product, dll_names, salt)
-        fix_libjulia_libpath!(libjulia)
+        fix_libjulia_libpath!(libjulia, dll_names, salt)
     catch e
         error("Failed to privatize libjulia on Windows", e)
     end
