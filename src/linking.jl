@@ -38,15 +38,11 @@ function get_rpath(recipe::LinkRecipe)
     return string(flag1, " ", flag2)
 end
 
-# Resolve the bin/ directory of the bundled mingw-w64 toolchain (winlibs MinGW-w64
-# GCC distribution). This artifact is os="windows"-gated and lazy, so this only
-# resolves on Windows. It ships the full binutils suite (gcc.exe, g++.exe, objcopy.exe,
-# windres.exe, ld.exe, dlltool.exe, as.exe) in one directory.
+# bin/ directory of the bundled mingw-w64 toolchain (winlibs GCC distribution), which ships
+# gcc and the binutils suite (objcopy, windres, dlltool, …) together. Windows-specific: the
+# artifact is os="windows"-gated, so `@static` keeps the `@artifact_str` expansion — which
+# would fail to resolve — off other platforms.
 function mingw_bindir()
-    # The `@artifact_str` macro expands at compile time and the artifact entry is
-    # os="windows"-gated, so it is unresolvable off-Windows. Guard with `@static if`
-    # so the macro is only expanded (and the lookup only attempted) on Windows; on
-    # other platforms this helper is never reached by the privatization path.
     @static if Sys.iswindows()
         return joinpath(LazyArtifacts.artifact"mingw-w64",
                         "extracted_files",
