@@ -74,6 +74,15 @@ Base.@ccallable return_void(x::Ptr{Cvoid}, y::Ptr{Ptr{Cvoid}})::Cvoid = nothing
 Base.@ccallable return_void_ptr()::Ptr{Cvoid} = Ptr{Cvoid}()
 Base.@ccallable return_void_ptr_ptr()::Ptr{Ptr{Cvoid}} = Ptr{Ptr{Cvoid}}()
 
+# A struct holding a heterogeneous tuple: its fields are numbered, not named.
+struct CPairBox
+    values::Tuple{Int32, Float64}
+end
+
+Base.@ccallable "pair_box_sum" function pair_box_sum(b::CPairBox)::Float64
+    return b.values[1] + b.values[2]
+end
+
 export countsame, copyto_and_sum
 
 # FIXME? varargs

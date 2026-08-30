@@ -91,6 +91,13 @@ end
     @test abi["types"][CVectorPair_Float32["fields"][2]["type_id"]]["name"] == "CVector{Float32}"
     @test CVectorPair_Float32["size"] == sizeof(UInt) * 4
 
+    # A heterogeneous tuple field is numbered: `fieldname` returns an integer
+    # for one, so the name has to be stringified rather than converted.
+    @test any(Bool[type["name"] == "CPairBox" for type in abi["types"]])
+    CPairBox = abi["types"][findfirst(type["name"] == "CPairBox" for type in abi["types"])]
+    inner = abi["types"][CPairBox["fields"][1]["type_id"]]
+    @test [f["name"] for f in inner["fields"]] == ["1", "2"]
+
     # `CTree{Float64}` should have been exported with the correct info
     @test any(Bool[type["name"] == "CTree{Float64}" for type in abi["types"]])
     CTree_Float64_id = findfirst(type["name"] == "CTree{Float64}" for type in abi["types"])
