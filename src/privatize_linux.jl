@@ -11,7 +11,7 @@ High-level steps:
 6) Remove originals.
 """
 
-using Patchelf_jll
+using LIEF_Patchelf_jll
 
 function privatize_libjulia_linux!(recipe::BundleRecipe, salt::String)
     try
@@ -32,16 +32,16 @@ end
 
 # Linux-specific dependency extraction
 function get_dependencies_linux(bin::String)
-    out = read(`$(Patchelf_jll.patchelf()) --print-needed $(bin)`, String)
+    out = read(`$(LIEF_Patchelf_jll.lief_patchelf()) --print-needed $(bin)`, String)
     return filter(!isempty, split(out, '\n'))
 end
 
 function patchelf_replace_needed!(binpath::String, old::String, new::String)
-    run(`$(Patchelf_jll.patchelf()) --replace-needed $(old) $(new) $(binpath)`)
+    run(`$(LIEF_Patchelf_jll.lief_patchelf()) --replace-needed $(old) $(new) $(binpath)`)
 end
 
 function patchelf_set_soname!(libpath::String, soname::String)
-    run(`$(Patchelf_jll.patchelf()) --set-soname $(soname) $(libpath)`)
+    run(`$(LIEF_Patchelf_jll.lief_patchelf()) --set-soname $(soname) $(libpath)`)
 end
 
 function version_stamp_symbols!(salted_paths::Dict{String,String}, product::String, salt::String)

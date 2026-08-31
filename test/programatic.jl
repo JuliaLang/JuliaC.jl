@@ -63,7 +63,7 @@
                 if Sys.isapple()
                     out = read(`otool -D $(f)`, String)
                 elseif Sys.islinux()
-                    out = read(`$(Patchelf_jll.patchelf()) --print-soname $(f)`, String)
+                    out = read(`$(LIEF_Patchelf_jll.lief_patchelf()) --print-soname $(f)`, String)
                 end
                 @test occursin("_libjulia", out)
             end
@@ -159,7 +159,7 @@
 
             soname = libname * "." * Base.BinaryPlatforms.platform_dlext()
             libpath = joinpath(outdir, "lib", soname)
-            actual_soname = readchomp(`$(Patchelf_jll.patchelf()) --print-soname $(libpath)`)
+            actual_soname = readchomp(`$(LIEF_Patchelf_jll.lief_patchelf()) --print-soname $(libpath)`)
             @test actual_soname == soname
         end
     end
@@ -218,7 +218,7 @@
             libfile_name = libname * "." * Base.BinaryPlatforms.platform_dlext()
             libpath = joinpath(outdir, "lib", libfile_name)
             output = if Sys.islinux()
-                readchomp(`$(Patchelf_jll.patchelf()) --print-rpath $(libpath)`)
+                readchomp(`$(LIEF_Patchelf_jll.lief_patchelf()) --print-rpath $(libpath)`)
             else
                 output = readchomp(`otool -l $(libpath)`)
             end

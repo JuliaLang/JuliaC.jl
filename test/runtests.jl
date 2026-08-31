@@ -1,7 +1,7 @@
 using Test
 using JuliaC
 using Libdl
-using Patchelf_jll
+using LIEF_Patchelf_jll
 
 const ROOT = abspath(joinpath(@__DIR__, ".."))
 const TEST_PROJ = abspath(joinpath(@__DIR__, "AppProject"))
