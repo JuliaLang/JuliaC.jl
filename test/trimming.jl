@@ -68,6 +68,39 @@ end
     @test lines[7] == "nested reductions: 2 9.0 9.0"
 end
 
+@testset "Trimming: static runtime" begin
+    if !Sys.islinux() || JuliaC.static_runtime_archive() === nothing
+        @test_skip "needs Linux and a Julia that ships libjulia-internal.a"
+    else
+        outdir = mktempdir()
+        exeout = joinpath(outdir, "trimmability")
+        img = JuliaC.ImageRecipe(
+            file = TRIM_PROJ,
+            output_type = "--output-exe",
+            trim_mode = "safe",
+            quiet = true,
+        )
+        JuliaC.compile_products(img)
+        link = JuliaC.LinkRecipe(image_recipe=img, outname=exeout, static_runtime=true)
+        JuliaC.link_products(link)
+        bun = JuliaC.BundleRecipe(link_recipe=link, output_dir=outdir)
+        JuliaC.bundle_products(bun)
+
+        actual_exe = joinpath(outdir, "bin", basename(exeout))
+        needed = readlines(`$(LIEF_Patchelf_jll.lief_patchelf()) --print-needed $(actual_exe)`)
+        @test !any(startswith("libjulia"), needed)
+        bundled = [f for (_, _, files) in walkdir(outdir) for f in files]
+        @test !any(startswith("libjulia"), bundled)
+
+        lines = split(readchomp(`$actual_exe arg1 arg2`), '\n')
+        @test lines[1] == "Hello, world!"
+        @test lines[2] == actual_exe  # PROGRAM_FILE
+        @test lines[3:4] == ["arg1", "arg2"]
+        @test parse(Float64, lines[5]) ≈ (4.0 + pi)
+        @test lines[7] == "nested reductions: 2 9.0 9.0"
+    end
+end
+
 @testset "Trimming: libsimple.jl C application test" begin
     outdir = mktempdir()
     libout = joinpath(outdir, "libsimple")

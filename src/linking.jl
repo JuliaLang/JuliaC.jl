@@ -82,6 +82,32 @@ function get_compiler_cmd(; cplusplus::Bool=false)
     return compiler_cmd
 end
 
+# Path of the static runtime archive shipped by this Julia, or `nothing`.
+# Installs keep it next to libjulia-internal; source builds keep it in libdir.
+function static_runtime_archive()
+    for dir in (JuliaConfig.private_libDir(), JuliaConfig.libDir())
+        path = joinpath(dir, "libjulia-internal.a")
+        isfile(path) && return path
+    end
+    return nothing
+end
+
+# Linker arguments replacing `-ljulia -ljulia-internal`: the runtime archive
+# and the shared libraries it needs.
+function _static_runtime_link_args(recipe::LinkRecipe)
+    Sys.islinux() || error("--static-runtime is currently only supported on Linux")
+    if recipe.image_recipe.output_type != "--output-exe"
+        error("--static-runtime currently only supports --output-exe")
+    end
+    archive = static_runtime_archive()
+    archive === nothing && error("--static-runtime requires a Julia that ships libjulia-internal.a")
+    # Julia code reaches most of the runtime through `ccall`, so keep all of it.
+    args = String["-Wl,$(Base.Linking.WHOLE_ARCHIVE)", archive, "-Wl,$(Base.Linking.NO_WHOLE_ARCHIVE)"]
+    append!(args, ["-lunwind", "-lzstd", "-latomic", "-lstdc++", "-lrt", "-ldl", "-lpthread", "-lm"])
+    push!(args, "-Wl,--gc-sections")
+    return args
+end
+
 function link_products(recipe::LinkRecipe)
     link_start = time_ns()
     image_recipe = recipe.image_recipe
@@ -115,7 +141,11 @@ function link_products(recipe::LinkRecipe)
         end
     end
     rpath_flags = get_rpath(recipe)
-    julia_libs = Base.isdebugbuild() ? ["-ljulia-debug", "-ljulia-internal-debug"] : ["-ljulia", "-ljulia-internal"]
+    julia_libs = if recipe.static_runtime
+        _static_runtime_link_args(recipe)
+    else
+        Base.isdebugbuild() ? ["-ljulia-debug", "-ljulia-internal-debug"] : ["-ljulia", "-ljulia-internal"]
+    end
     compiler_cmd = get_compiler_cmd()
     allflags = JuliaConfig.allflags(; framework=false, rpath=false)
     try

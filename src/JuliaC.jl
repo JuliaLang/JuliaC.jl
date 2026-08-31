@@ -55,6 +55,9 @@ Base.@kwdef mutable struct LinkRecipe
     outname::String = ""
     rpath::String = RPATH_JULIA
     ld_flags::Vector{String} = String[]
+    # Link the runtime archive libjulia-internal.a into the executable instead
+    # of linking against libjulia and libjulia-internal.
+    static_runtime::Bool = false
 end
 
 Base.@kwdef mutable struct BundleRecipe
@@ -93,6 +96,8 @@ function _print_usage(io::IO=stdout)
     println(io, "Options:")
     println(io, "  --output-exe <name>         Output native executable (name only)")
     println(io, "  --output-lib <path>         Output shared library (lib)")
+    println(io, "  --static-runtime            Link the Julia runtime into the executable (experimental, Linux only;")
+    println(io, "                              requires a Julia that ships libjulia-internal.a)")
     println(io, "  --output-sysimage <path>    Output shared library (sysimage)")
     println(io, "  --output-o <path>           Output object archive (default for linking)")
     println(io, "  --output-bc <path>          Output LLVM bitcode archive")
@@ -147,6 +152,8 @@ function _parse_cli_args(args::Vector{String})
             image_recipe.trim_mode = "safe"
         elseif arg == "--experimental"
             push!(image_recipe.julia_args, arg)
+        elseif arg == "--static-runtime"
+            link_recipe.static_runtime = true
         elseif arg == "--compile-ccallable"
             image_recipe.add_ccallables = true
         elseif startswith(arg, "--jl-option")
@@ -204,6 +211,8 @@ function _parse_cli_args(args::Vector{String})
     image_recipe.file == "" && error("No input file specified")
     bundle_recipe.bundle_lazy_artifacts && !bundle_specified &&
             error("--bundle-lazy-artifacts requires --bundle")
+    link_recipe.static_runtime && bundle_recipe.privatize !== false &&
+            error("--privatize does not apply to --static-runtime")
 
     if bundle_specified
         if bundle_recipe.output_dir === nothing
