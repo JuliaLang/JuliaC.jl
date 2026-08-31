@@ -652,3 +652,77 @@ end
     output = read(`$output_exe`, String)
     @test occursin("hello from a relative-path dependency", output)
 end
+
+@testset "Workspace member build honors root manifest & `[sources]`" begin
+    # A package that is a member of a workspace keeps its resolved Manifest.toml
+    # and its `[sources]` at the workspace *root*, not beside its own Project.toml.
+    # Building the member must resolve against that shared root manifest instead of
+    # re-resolving from scratch (which would lose reproducibility and drop the
+    # root-only `[sources]` path dependency).
+    src_ws = abspath(joinpath(@__DIR__, "WorkspaceProject"))
+    ws = joinpath(mktempdir(), "WorkspaceProject")
+    cp(src_ws, ws)
+    # Make the copy writable (repo files may be checked out read-only under CI).
+    for (root, dirs, files) in walkdir(ws)
+        for n in Iterators.flatten((dirs, files))
+            p = joinpath(root, n)
+            chmod(p, filemode(p) | 0o200)
+        end
+    end
+    member = joinpath(ws, "MainApp")
+
+    # Establish the shared root manifest, then freeze a snapshot of it.
+    run(addenv(`$(Base.julia_cmd()) --startup-file=no --history-file=no
+                --project=$ws -e "using Pkg; Pkg.resolve()"`,
+               "JULIA_LOAD_PATH" => nothing))
+    root_manifest = joinpath(ws, "Manifest.toml")
+    @test isfile(root_manifest)
+    @test !isfile(joinpath(member, "Manifest.toml"))
+    manifest_before = read(root_manifest, String)
+
+    outdir = mktempdir()
+    exeout = joinpath(outdir, "wsmember")
+    img = JuliaC.ImageRecipe(
+        file = member,
+        output_type = "--output-exe",
+        quiet = true,
+    )
+    JuliaC.compile_products(img)
+    link = JuliaC.LinkRecipe(image_recipe=img, outname=exeout, rpath=JuliaC.RPATH_BUNDLE)
+    JuliaC.link_products(link)
+    bun = JuliaC.BundleRecipe(link_recipe=link, output_dir=outdir)
+    JuliaC.bundle_products(bun)
+
+    output_exe = Sys.iswindows() ?
+        joinpath(outdir, "bin", basename(exeout) * ".exe") :
+        joinpath(outdir, "bin", basename(exeout))
+    @test isfile(output_exe)
+    # The root-only `[sources]` path dependency resolved correctly.
+    @test occursin("hello from WsDep", read(`$output_exe`, String))
+    # The build did not re-resolve into the member...
+    @test !isfile(joinpath(member, "Manifest.toml"))
+    # ...and left the shared root manifest byte-for-byte unchanged (reproducible).
+    @test read(root_manifest, String) == manifest_before
+end
+
+@testset "Read-only project without a manifest is rejected" begin
+    # Julia cannot load an explicit environment that has no manifest, and a
+    # read-only directory cannot receive one, so the build stops with a
+    # diagnostic instead of resolving into a throwaway environment.
+    # Directory permissions cannot be checked into git, so the fixture is made here.
+    proj = joinpath(mktempdir(), "ReadOnlyApp")
+    Pkg.generate(proj; io = devnull)
+    chmod(proj, 0o500)
+    try
+        img = JuliaC.ImageRecipe(
+            file = proj,
+            output_type = "--output-exe",
+            quiet = true,
+        )
+        # Windows, `root` and some container filesystems keep the directory
+        # writable regardless of its mode, which leaves nothing to test.
+        iswritable(proj) || @test_throws "not writable" JuliaC.compile_products(img)
+    finally
+        chmod(proj, 0o700)
+    end
+end

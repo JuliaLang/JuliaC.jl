@@ -18,8 +18,8 @@ function bundle_products(recipe::BundleRecipe)
     image_recipe = recipe.link_recipe.image_recipe
     quiet = image_recipe.quiet
 
-    # Bundle from the temporary project, where we compiled from
-    @assert !isempty(image_recipe.instantiated_project) "project was not copied / instantiated"
+    # Bundle from the project the image was compiled from
+    @assert !isempty(image_recipe.instantiated_project) "project was not instantiated"
     ctx2 = PackageCompiler.create_pkg_context(image_recipe.instantiated_project)
     stdlibs = unique(vcat(PackageCompiler.gather_stdlibs_project(ctx2),
                           intersect(PackageCompiler._STDLIBS, map(x->x.name, Base._sysimage_modules))))

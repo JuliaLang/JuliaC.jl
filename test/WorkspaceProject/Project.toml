@@ -1,0 +1,8 @@
+[deps]
+WsDep = "66666666-6666-6666-6666-666666666666"
+
+[sources]
+WsDep = {path = "WsDep"}
+
+[workspace]
+projects = ["MainApp"]
