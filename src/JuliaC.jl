@@ -51,6 +51,10 @@ Base.@kwdef mutable struct LinkRecipe
     outname::String = ""
     rpath::String = RPATH_JULIA
     ld_flags::Vector{String} = String[]
+    # Link the Julia runtime statically (libjulia-internal.a) instead of
+    # against libjulia/libjulia-internal shared libraries. Requires a Julia
+    # build that provides lib/libjulia-internal.a. Experimental, exe-only.
+    static_runtime::Bool = false
 end
 
 Base.@kwdef mutable struct BundleRecipe
@@ -86,6 +90,8 @@ function _print_usage(io::IO=stdout)
     println(io, "Options:")
     println(io, "  --output-exe <name>         Output native executable (name only)")
     println(io, "  --output-lib <path>         Output shared library (lib)")
+    println(io, "  --static-runtime            Link the Julia runtime statically (experimental, Linux exe only;")
+    println(io, "                              requires a Julia providing lib/libjulia-internal.a)")
     println(io, "  --output-sysimage <path>    Output shared library (sysimage)")
     println(io, "  --output-o <path>           Output object archive (default for linking)")
     println(io, "  --output-bc <path>          Output LLVM bitcode archive")
@@ -138,6 +144,8 @@ function _parse_cli_args(args::Vector{String})
             image_recipe.trim_mode = "safe"
         elseif arg == "--experimental"
             push!(image_recipe.julia_args, arg)
+        elseif arg == "--static-runtime"
+            link_recipe.static_runtime = true
         elseif arg == "--compile-ccallable"
             image_recipe.add_ccallables = true
         elseif startswith(arg, "--jl-option")

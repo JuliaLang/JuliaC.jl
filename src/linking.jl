@@ -87,6 +87,35 @@ function get_compiler_cmd(; cplusplus::Bool=false)
     return compiler_cmd
 end
 
+# Locate the static runtime archive and the external libraries it needs.
+# Returns the linker arguments replacing `-ljulia -ljulia-internal`.
+function _static_runtime_link_args(recipe::LinkRecipe)
+    Sys.islinux() || error("--static-runtime is currently only supported on Linux")
+    if recipe.image_recipe.output_type != "--output-exe"
+        error("--static-runtime currently only supports --output-exe")
+    end
+    libdir = JuliaConfig.libDir()
+    archive = joinpath(libdir, Base.isdebugbuild() ? "libjulia-internal-debug.a" : "libjulia-internal.a")
+    isfile(archive) || error("""
+        --static-runtime requires $(basename(archive)), which this Julia does not provide.
+        Build it from a Julia source tree with `make -C src \$(pwd)/usr/lib/libjulia-internal.a`.
+        Looked in: $libdir""")
+    args = String[]
+    # The image is already linked with --whole-archive by the caller; the
+    # runtime archive needs it too, since Julia code reaches most runtime
+    # symbols through ccall rather than through C references.
+    push!(args, "-Wl,$(Base.Linking.WHOLE_ARCHIVE)", archive, "-Wl,$(Base.Linking.NO_WHOLE_ARCHIVE)")
+    # External libraries the runtime archive depends on. LLVMSupport (used by
+    # the processor/target-selection code) lives in Julia's libdir.
+    append!(args, ["-lunwind", "-lLLVMSupport", "-lLLVMDemangle",
+                   "-lzstd", "-lz", "-lrt", "-ldl", "-lpthread", "-lm", "-latomic", "-lstdc++"])
+    # Image ccalls resolve through the Julia PLT (dlsym on the executable), so
+    # the runtime's symbols must be in the dynamic symbol table; ldflags()
+    # already passes --export-dynamic on Linux. Drop unused jl_* thunks.
+    push!(args, "-Wl,--gc-sections")
+    return args
+end
+
 function link_products(recipe::LinkRecipe)
     link_start = time_ns()
     image_recipe = recipe.image_recipe
@@ -119,8 +148,12 @@ function link_products(recipe::LinkRecipe)
             end
         end
     end
-    rpath_str = Base.shell_split(get_rpath(recipe))
-    julia_libs = Base.shell_split(Base.isdebugbuild() ? "-ljulia-debug -ljulia-internal-debug" : "-ljulia -ljulia-internal")
+    rpath_str = recipe.static_runtime ? String[] : Base.shell_split(get_rpath(recipe))
+    julia_libs = if recipe.static_runtime
+        _static_runtime_link_args(recipe)
+    else
+        Base.shell_split(Base.isdebugbuild() ? "-ljulia-debug -ljulia-internal-debug" : "-ljulia -ljulia-internal")
+    end
     compiler_cmd = get_compiler_cmd()
     allflags = Base.shell_split(JuliaConfig.allflags(; framework=false, rpath=false))
     try
