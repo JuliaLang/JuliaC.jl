@@ -26,6 +26,22 @@ let
         Base.UUID("56f22d72-fd6d-98f1-02f0-08ddc0907c33"), "Artifacts"))
     if Artifacts !== nothing
         @eval Artifacts begin
+            # `Overrides.toml` is not consulted: `load_overrides` parses it into
+            # `Dict{Symbol,Any}` tables, dynamic calls the trim verifier cannot
+            # resolve. The closed world resolves artifacts by depot layout only.
+            # This is also what `Base.string(::LazyJLLWrappers.LazyArtifactDir)`
+            # reaches, so artifact-backed lazy library paths verify through it.
+            function artifact_path(hash::SHA1; honor_overrides::Bool=true)
+                possible_paths = artifacts_dirs(bytes2hex(hash.bytes))
+                for p in possible_paths
+                    if isdir(p)
+                        return p
+                    end
+                end
+                # If none exist, then just return the one that would exist within `depots1()`.
+                return first(possible_paths)
+            end
+
             function _artifact_str(
                 __module__,
                 artifacts_toml,
@@ -38,13 +54,9 @@ let
             ) where LazyArtifacts
                 # If the artifact exists, we're in the happy path and we can immediately
                 # return the path to the artifact:
-                dirs = artifacts_dirs(bytes2hex(hash.bytes))
-                for dir in dirs
-                    if isdir(dir)
-                        return jointail(dir, path_tail)
-                    end
-                end
-                error("Artifact not found")
+                dir = artifact_path(hash)
+                isdir(dir) || error("Artifact not found")
+                return jointail(dir, path_tail)
             end
         end
     end
