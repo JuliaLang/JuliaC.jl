@@ -3,16 +3,20 @@
 # Resolution pass for `--link-native`: turn package-level specs
 # (`Pkg_jll` or `Pkg_jll.product`) into a concrete set of libraries by
 # consuming each package's `JLL.toml` record, register every resolved
-# library's dlid with the runtime's native-link policy table, and write a
-# link-inputs manifest for the driver's link step.
+# library's identity with the runtime's native-link policy table, and write
+# a link-inputs manifest for the driver's link step.
 #
-# The record format (`format_version = "1.0"`) is shared with
-# BinaryBuilder2-generated JLLs; hand-written stdlib records are partial
-# instances of the same schema. It is the historical JLL.toml shape plus
-# four fields: `format_version` at top level, `location` per build, and
-# `linkage` + `dlid` on each library product entry. Records predating those
-# fields are read with defaults, so an unversioned JLL.toml still resolves
-# (minus native linking, which needs a dlid).
+# The record format (`format_version = "1.0"`) is the one BinaryBuilder2
+# generates: each build carries an `artifact` table that either binds an
+# artifact (`treehash`) or names a Julia-bundled location (`bundled_path`),
+# and each library product entry states its `linkage` ("dynamic" or
+# "static"); static entries add `path`, `deps`, `system_deps` and `roots`.
+# Records predating those fields are read with defaults where possible.
+#
+# A library's identity is not read from the record: it is the `LibraryID`
+# the package's wrapper declares, `LibraryID(<package UUID>, "<product>")`,
+# which this pass reconstructs from the same two coordinates and registers as
+# the key "<uuid>:<product>".
 #
 # This runs before any user code (and therefore before any ccall lowering),
 # in the target process, so record resolution sees the target project's
@@ -28,7 +32,7 @@ struct ResolvedLibrary
     spec::String        # the request that pulled this in (or "<dep of X>")
     package::String
     product::String
-    dlid::String
+    dlid::String        # identity key "<package uuid>:<product>" (see `library_identity_key`)
     dlname::String      # the dynamic library's soname (identification / bundle filtering)
     # Absolute path of the file to link, or `nothing` for a library whose
     # sites are bound natively but whose symbols are satisfied by other link
@@ -46,10 +50,15 @@ ResolvedLibrary(spec, package, product, dlid, dlname, path, linkage, location, s
                     system_deps, nothing)
 
 # Locate a package's source directory without loading the package.
-function locate_pkgdir(pkgname::AbstractString)
+function locate_pkgid(pkgname::AbstractString)
     pkgid = Base.identify_package(String(pkgname))
     pkgid === nothing &&
         error("--link-native: package $pkgname not found in the project's dependencies")
+    return pkgid
+end
+
+function locate_pkgdir(pkgname::AbstractString)
+    pkgid = locate_pkgid(pkgname)
     entry = Base.locate_package(pkgid)
     entry === nothing &&
         error("--link-native: package $pkgname could not be located (is the project instantiated?)")
@@ -74,18 +83,6 @@ function load_record(pkgname::AbstractString, record_cache::Dict{String,Any})
         end
         haskey(record, "builds") ||
             error("--link-native: $record_path declares no builds")
-        # Identity is per product, not per entry: every entry naming a product
-        # must agree about its dlid.
-        seen_dlid = Dict{String,String}()
-        for build in record["builds"], (name, _, entry) in build_library_entries(build)
-            dlid = get(entry, "dlid", nothing)
-            dlid isa String || continue
-            prev = get(seen_dlid, name, nothing)
-            prev === nothing || prev == dlid ||
-                error("--link-native: $record_path gives $name two identities " *
-                      "($(prev) and $(dlid)); a product's dlid is platform-invariant")
-            seen_dlid[name] = dlid
-        end
         return record
     end
 end
@@ -106,13 +103,38 @@ function build_library_entries(build)
     return entries
 end
 
-# Where a build's product paths resolve. Absent in a record written before
-# the field existed, where binding an artifact is what identifies one.
-build_location(b) =
-    String(get(b, "location", build_artifact_hash(b) === nothing ? "bundled" : "artifact"))
+# The identity key of a package's library product: the package UUID and the
+# product name, exactly as the wrapper declares `LibraryID(uuid, name)`.
+function library_identity_key(pkgname::AbstractString, prodname::AbstractString)
+    pkgid = locate_pkgid(pkgname)
+    pkgid.uuid === nothing &&
+        error("--link-native: package $pkgname has no UUID, so its libraries have no identity")
+    return lowercase(string(pkgid.uuid)) * ":" * String(prodname)
+end
+
+# Where a build's product paths resolve: "artifact" when the build's
+# `artifact` table binds one (`treehash`), "bundled" when it names a location
+# inside the Julia installation (`bundled_path`). Records written before the
+# `artifact` table existed carried a `location` key instead.
+function build_location(b)
+    binding = get(b, "artifact", nothing)
+    if binding isa Dict
+        haskey(binding, "bundled_path") && return "bundled"
+        haskey(binding, "treehash") && return "artifact"
+    end
+    return String(get(b, "location", build_artifact_hash(b) === nothing ? "bundled" : "artifact"))
+end
+
+# For a bundled build, which directory of the Julia installation its product
+# paths are relative to.
+function build_bundled_path(b)
+    binding = get(b, "artifact", nothing)
+    binding isa Dict || return "private_shlibdir"
+    return String(get(binding, "bundled_path", "private_shlibdir"))
+end
 
 # Keys of a [[builds]] block that are data rather than platform-selector
-# tags in the hand-written (tag-key) spelling.
+# tags in the hand-written (tag-key) form.
 const BUILD_DATA_KEYS = ("location", "platform", "platforms", "name", "src_version", "lazy")
 
 # The SHA1 tree hash of a build's artifact binding, or `nothing`.
@@ -184,8 +206,8 @@ function select_build(record::Dict{String,Any}, host::AbstractPlatform)
     return build === nothing ? wildcard : build
 end
 
-# The private shared-library directory of this Julia installation, where
-# `location = "bundled"` products live under their `dlname`.
+# The private shared-library directory of this Julia installation
+# (`bundled_path = "private_shlibdir"`).
 function bundled_shlibdir()
     libname = ifelse(Base.isdebugbuild(), "libjulia-internal-debug", "libjulia-internal")
     return dirname(Base.Libc.Libdl.dlpath(libname))
@@ -209,9 +231,13 @@ function resolve_library(spec::String, pkgname::String, prodname::String,
                   "(is the project instantiated?)")
         base = Artifacts.artifact_path(hash)
     else
-        # Bundled: paths resolve against the private shlibdir of the Julia
+        # Bundled: paths resolve against the named directory of the Julia
         # installation that owns the record.
-        base = bundled_shlibdir()
+        bundled_path = build_bundled_path(build)
+        base = bundled_path == "private_shlibdir" ? bundled_shlibdir() :
+               bundled_path == "private_libdir" ? dirname(bundled_shlibdir()) :
+               bundled_path == "private_bindir" ? Sys.BINDIR :
+               error("--link-native: $pkgname's record build names unsupported bundled_path $(repr(bundled_path))")
     end
 
     # A product may appear once per linkage; identity is shared between them.
@@ -230,10 +256,7 @@ function resolve_library(spec::String, pkgname::String, prodname::String,
     end
     (dynentry === nothing && stentry === nothing) &&
         error("--link-native: $pkgname.$prodname is not available for this platform")
-    dlid = get(something(dynentry, stentry), "dlid", nothing)
-    dlid isa String ||
-        error("--link-native: $pkgname.$prodname declares no dlid, so its call " *
-              "sites cannot be bound natively")
+    dlid = library_identity_key(pkgname, prodname)
 
     if static
         # Static linkage: link the archive declared by the entry. Its
@@ -284,11 +307,11 @@ const BLAS_TRAMPOLINE_PACKAGE = "libblastrampoline_jll"
 
 """
 Resolve `--link-native` specs to concrete libraries, close over their record
-dependency edges, register every dlid with the runtime policy table, and
+dependency edges, register every identity with the runtime policy table, and
 write the link-inputs manifest to `link_inputs_path`.
 
 With `blas_provider` set (`--link-native-blas`), additionally register
-libblastrampoline's dlids — without linking libblastrampoline itself — and
+libblastrampoline's identities — without linking libblastrampoline itself — and
 resolve the provider (and its closure) as ordinary native link inputs.
 """
 function resolve_and_register!(specs::Vector{String}, link_inputs_path::String;
