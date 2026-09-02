@@ -73,6 +73,7 @@ end
         inputs(static_input(FOO_UUID, "libfoo"), static_input(FOO_UUID, "libfoof")), nothing)
     @test length(plan) == 1 && !plan[1].drop
     @test sort(plan[1].remove) == [("libfoo", "lib/libfoo.so.1.2.3"), ("libfoof", "lib/libfoof.so.1.2.3")]
+    @test sort(plan[1].archives) == [("libfoo", "lib/libfoo.a"), ("libfoof", "lib/libfoof.a")]
 
     # One product static, the other reached lazily: keep the artifact, remove
     # only the static product's shared library.
@@ -80,17 +81,22 @@ end
         manifest("libfoo" => native_group(FOO_UUID, "libfoo"), "libfoof" => lazy_group(FOO_UUID, "libfoof")))
     @test length(plan) == 1 && !plan[1].drop && plan[1].remove == [("libfoo", "lib/libfoo.so.1.2.3")]
 
+    # A kept artifact loses only its static libraries, which nothing loads
+    # at run time.
+    archives_only(plan) = length(plan) == 1 && !plan[1].drop && isempty(plan[1].remove) &&
+        sort(plan[1].archives) == [("libfoo", "lib/libfoo.a"), ("libfoof", "lib/libfoof.a")]
+
     # A natively-linked *dynamic* product is flattened into lib/julia; the
-    # artifact is treated as referenced and nothing is removed from it.
+    # artifact is treated as referenced and its shared libraries stay.
     plan = JuliaC._artifact_prune_plan(records,
         inputs(dynamic_input(FOO_UUID, "libfoo"), dynamic_input(FOO_UUID, "libfoof")),
         manifest("libfoo" => native_group(FOO_UUID, "libfoo")))
-    @test isempty(plan)
+    @test archives_only(plan)
 
-    # Nothing linked natively, one product reached lazily: untouched.
+    # Nothing linked natively, one product reached lazily: shared libraries stay.
     plan = JuliaC._artifact_prune_plan(records, inputs(),
         manifest("libfoo" => lazy_group(FOO_UUID, "libfoo")))
-    @test isempty(plan)
+    @test archives_only(plan)
 
     # A non-library product keeps the artifact even when every library is static.
     withfile = fake_record(FOO_UUID, "Foo_jll", fake_build(FOO_HASH, ["libfoo"];
@@ -105,12 +111,13 @@ end
         fake_build(BAR_HASH, ["libbar"]; deps = Dict("libbar" => ["Foo_jll.libfoo"])))
     plan = JuliaC._artifact_prune_plan(Dict(FOO_UUID => foo, BAR_UUID => bar), inputs(),
         manifest("libbar" => lazy_group(BAR_UUID, "libbar")))
-    @test isempty(plan)
+    @test [(a.hash, a.drop, a.remove) for a in plan] == [(FOO_HASH, false, []), (BAR_HASH, false, [])]
     # Without that edge, Foo's artifact is unreachable and dropped; Bar's stays.
     bar2 = fake_record(BAR_UUID, "Bar_jll", fake_build(BAR_HASH, ["libbar"]))
     plan = JuliaC._artifact_prune_plan(Dict(FOO_UUID => foo, BAR_UUID => bar2), inputs(),
         manifest("libbar" => lazy_group(BAR_UUID, "libbar")))
-    @test [(a.hash, a.drop) for a in plan] == [(FOO_HASH, true)]
+    @test [(a.hash, a.drop) for a in plan] == [(FOO_HASH, true), (BAR_HASH, false)]
+    @test plan[2].archives == [("libbar", "lib/libbar.a")]
 
     # A bundled (non-artifact) build has nothing in share/julia/artifacts.
     bundled = fake_record(FOO_UUID, "Foo_jll", Dict{String, Any}(
@@ -144,12 +151,14 @@ end
         mkpath(joinpath(bar, "lib"))
         write(joinpath(bar, "lib", "libbar.so.1"), "x")
 
-        plan = [JuliaC.ArtifactPrune(FOO_HASH, "Foo_jll", false, [("libfoo", "lib/libfoo.so.1.2.3")]),
-                JuliaC.ArtifactPrune(BAR_HASH, "Bar_jll", true, Tuple{String, String}[])]
-        dropped, removed = JuliaC._apply_artifact_prune!(out, plan; quiet = true)
+        plan = [JuliaC.ArtifactPrune(FOO_HASH, "Foo_jll", false, [("libfoo", "lib/libfoo.so.1.2.3")],
+                                     [("libfoo", "lib/libfoo.a"), ("libfoof", "lib/libfoof.a")]),
+                JuliaC.ArtifactPrune(BAR_HASH, "Bar_jll", true, Tuple{String, String}[], Tuple{String, String}[])]
+        dropped, removed, archives = JuliaC._apply_artifact_prune!(out, plan; quiet = true)
         @test dropped == ["$BAR_HASH (Bar_jll)"]
         @test length(removed) == 3
-        @test sort(readdir(lib)) == ["libfoo.a", "libfoo.la", "libfoof.so.1.2.3"]
+        @test archives == ["Foo_jll.libfoo: lib/libfoo.a"]   # libfoof.a is absent: skipped
+        @test sort(readdir(lib)) == ["libfoo.la", "libfoof.so.1.2.3"]
         @test !ispath(bar)
     end
 end

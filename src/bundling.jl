@@ -412,6 +412,10 @@ struct ArtifactPrune
     # artifact) for every statically linked product; the file and its
     # soname/symlink chain are removed.
     remove::Vector{Tuple{String, String}}
+    # When not dropping: (product, path of its static library within the
+    # artifact) for every static library product. Nothing loads an archive
+    # at run time, so they are removed from every kept artifact.
+    archives::Vector{Tuple{String, String}}
 end
 
 # Products of artifact-located libraries the link step provided natively,
@@ -502,15 +506,20 @@ function _artifact_prune_plan(records::Dict{String, JLLRecord}, inputs, manifest
         reached = any(l -> l in d || (uuid, l) in lazy, libs)
         drop = manifest !== nothing && !has_other_products && !reached
         remove = Tuple{String, String}[]
+        archives = Tuple{String, String}[]
         if !drop
             for (name, linkage, p) in entries
-                (name in s && linkage == "dynamic") || continue
                 path = get(p, "path", nothing)
-                path isa String && push!(remove, (name, path))
+                path isa String || continue
+                if linkage == "static"
+                    push!(archives, (name, path))
+                elseif name in s && linkage == "dynamic"
+                    push!(remove, (name, path))
+                end
             end
         end
-        (drop || !isempty(remove)) &&
-            push!(plan, ArtifactPrune(bytes2hex(hash.bytes), rec.name, drop, remove))
+        (drop || !isempty(remove) || !isempty(archives)) &&
+            push!(plan, ArtifactPrune(bytes2hex(hash.bytes), rec.name, drop, remove, archives))
     end
     return sort!(plan; by = a -> a.hash)
 end
@@ -528,6 +537,7 @@ function _apply_artifact_prune!(output_dir::String, plan::Vector{ArtifactPrune};
     artifacts_dir = joinpath(output_dir, "share", "julia", "artifacts")
     dropped = String[]
     removed = String[]
+    archives = String[]
     for a in plan
         dir = joinpath(artifacts_dir, a.hash)
         isdir(dir) || continue
@@ -546,6 +556,12 @@ function _apply_artifact_prune!(output_dir::String, plan::Vector{ArtifactPrune};
                 push!(removed, "$(a.package).$(product): $(joinpath(dirname(relpath), f))")
             end
         end
+        for (product, relpath) in a.archives
+            path = joinpath(dir, relpath)
+            isfile(path) || continue
+            rm(path; force = true)
+            push!(archives, "$(a.package).$(product): $(relpath)")
+        end
     end
     if !quiet
         if !isempty(dropped)
@@ -556,13 +572,18 @@ function _apply_artifact_prune!(output_dir::String, plan::Vector{ArtifactPrune};
             println("Pruned $(length(removed)) shared libraries of statically linked products from bundled artifacts:")
             foreach(r -> println("  - ", r), removed)
         end
+        if !isempty(archives)
+            println("Pruned $(length(archives)) static libraries from bundled artifacts:")
+            foreach(r -> println("  - ", r), archives)
+        end
     end
-    return dropped, removed
+    return dropped, removed, archives
 end
 
 # Apply `_artifact_prune_plan` to the bundle. The link-inputs manifest
 # supplies the natively-provided products; the foreign-deps manifest is
-# consulted only under `--trim`, where it is complete.
+# consulted only under `--trim`, where it is complete. Static library
+# products go from every kept artifact regardless.
 function _prune_bundled_artifacts!(recipe::BundleRecipe, records::Dict{String, JLLRecord})
     image_recipe = recipe.link_recipe.image_recipe
     inputs_path = image_recipe.link_inputs_path
