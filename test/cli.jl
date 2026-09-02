@@ -27,6 +27,32 @@ end
     @test occursin("Fast compilation test!", output)
 end
 
+if Sys.which("strip") !== nothing
+@testset "CLI app --strip end-to-end" begin
+    outdir = mktempdir()
+    exename = "app"
+    cliargs = String[
+        "--output-exe", exename,
+        "--trim=safe",
+        TEST_PROJ,
+        "--bundle", outdir,
+        "--strip",
+        "--quiet",
+    ]
+    run_juliac_cli(cliargs)
+    actual_exe = Sys.iswindows() ? joinpath(outdir, "bin", exename * ".exe") : joinpath(outdir, "bin", exename)
+    @test isfile(actual_exe)
+    @test occursin("Fast compilation test!", read(`$actual_exe`, String))
+    # The bundled runtime library is smaller than the installation's copy.
+    installed = Libdl.dlpath("libjulia-internal")
+    libroot = joinpath(outdir, Sys.iswindows() ? "bin" : "lib")
+    bundled = joinpath(libroot, basename(installed))
+    isfile(bundled) || (bundled = joinpath(libroot, "julia", basename(installed)))
+    @test isfile(bundled)
+    @test filesize(bundled) < filesize(installed)
+end
+end
+
 # Windows expects all binaries to be next to each other, so we can't test this
 if Sys.isunix()
     @testset "CLI app without bundle (system rpaths)" begin
@@ -232,6 +258,14 @@ end
     ]
     _, _, bun_lazy = JuliaC._parse_cli_args(args_lazy)
     @test bun_lazy.bundle_lazy_artifacts == true
+
+    # --strip opts in and requires --bundle
+    _, _, bun_strip = JuliaC._parse_cli_args(String[
+        "--output-exe", "app", "--project", TEST_PROJ, TEST_SRC, "--bundle", "--strip"])
+    @test bun_strip.strip == true
+    @test bun3.strip == false
+    @test_throws ErrorException JuliaC._parse_cli_args(String[
+        "--output-exe", "app", "--project", TEST_PROJ, TEST_SRC, "--strip"])
 
     # --bundle-lazy-artifacts requires --bundle
     args_lazy_no_bundle = String[

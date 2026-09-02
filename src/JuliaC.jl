@@ -81,6 +81,7 @@ Base.@kwdef mutable struct BundleRecipe
     libdir::String = Sys.iswindows() ? "bin" : "lib"
     privatize::Bool = false
     bundle_lazy_artifacts::Bool = false
+    strip::Bool = false # strip symbol and debug tables from the bundled binaries
 end
 
 include("compiling.jl")
@@ -130,6 +131,7 @@ function _print_usage(io::IO=stdout)
     println(io, "  --bundle <dir>              Bundle libjulia, stdlibs, and artifacts")
     println(io, "  --bundle-lazy-artifacts     Also bundle lazy artifacts (off by default)")
     println(io, "  --privatize                 Privatize bundled libjulia (Unix)")
+    println(io, "  --strip                     Strip symbol/debug tables from bundled binaries")
     println(io, "  --trim[=mode]               Strip IR/metadata (e.g. --trim=safe)")
     println(io, "  --compile-ccallable         Export ccallable entrypoints")
     println(io, "  --jl-option <key=value>     Set a Julia option using CLI syntax (supported: handle-signals=[yes/no], threads=[N])")
@@ -256,6 +258,8 @@ function _parse_cli_args(args::Vector{String})
             bundle_recipe.bundle_lazy_artifacts = true
         elseif arg == "--privatize"
             bundle_recipe.privatize = true
+        elseif arg == "--strip"
+            bundle_recipe.strip = true
         elseif arg == "--verbose"
             image_recipe.verbose = true
         elseif arg == "--quiet"
@@ -277,6 +281,7 @@ function _parse_cli_args(args::Vector{String})
     image_recipe.file == "" && error("No input file specified")
     bundle_recipe.bundle_lazy_artifacts && !bundle_specified &&
             error("--bundle-lazy-artifacts requires --bundle")
+    bundle_recipe.strip && !bundle_specified && error("--strip requires --bundle")
 
     if bundle_specified
         if bundle_recipe.output_dir === nothing

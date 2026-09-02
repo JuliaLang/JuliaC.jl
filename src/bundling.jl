@@ -810,6 +810,13 @@ function bundle_products(recipe::BundleRecipe)
         privatize_libjulia!(recipe)
     end
 
+    # Strip symbol and debug tables from the bundled binaries (opt-in). Runs
+    # after every mutation of the objects and before signing, which the
+    # stripping would invalidate.
+    if recipe.strip
+        _strip_bundle!(recipe)
+    end
+
     # On macOS, codesign the bundled binaries to avoid Gatekeeper kills when loading
     if Sys.isapple()
         _codesign_bundle!(recipe)
@@ -832,6 +839,71 @@ function bundle_products(recipe::BundleRecipe)
     # Don't leak a value here: `@main` treats a returned `Bool` (`Bool <: Integer`)
     # as a process exit code, so `quiet || ...` returning `true` would exit 1.
     return nothing
+end
+
+# Whether the file at `path` is a linked native object (ELF, Mach-O, or PE)
+# that `strip` operates on. Symlinks are handled through their targets; static
+# archives, linker scripts (`libgcc_s.so` is one), certificates, and other
+# data files are left alone.
+function _is_strippable_object(path::AbstractString)
+    islink(path) && return false
+    isfile(path) || return false
+    filesize(path) >= 4 || return false
+    magic = open(io -> read(io, 4), path)
+    magic == UInt8[0x7f, 0x45, 0x4c, 0x46] && return true            # ELF
+    magic in (UInt8[0xcf, 0xfa, 0xed, 0xfe], UInt8[0xce, 0xfa, 0xed, 0xfe],
+              UInt8[0xfe, 0xed, 0xfa, 0xcf], UInt8[0xfe, 0xed, 0xfa, 0xce],
+              UInt8[0xca, 0xfe, 0xba, 0xbe]) && return true           # Mach-O (thin, fat)
+    magic[1:2] == UInt8[0x4d, 0x5a] && return true                    # PE ("MZ")
+    return false
+end
+
+# The `strip` invocation for this platform. GNU/LLVM `strip --strip-unneeded`
+# drops the symbol and debug tables while keeping every symbol the dynamic
+# linker needs (`.dynsym` and its exports, which `dlsym` and the image
+# lookups go through). Apple's `strip` has no such mode; `-x` drops local
+# symbols and `-S` the debug symbols, keeping the exported ones.
+function _strip_command(path::AbstractString)
+    strip = Sys.which("strip")
+    strip === nothing && error("--strip requires a `strip` tool on PATH")
+    return Sys.isapple() ? `$strip -x -S $path` : `$strip --strip-unneeded $path`
+end
+
+# Strip every native object in the bundle in place: the runtime and stdlib
+# libraries, the output product, and the libraries of bundled artifacts.
+function _strip_bundle!(recipe::BundleRecipe)
+    image_recipe = recipe.link_recipe.image_recipe
+    quiet = image_recipe.quiet
+    verbose = image_recipe.verbose
+    objects = String[]
+    for (root, _, files) in walkdir(recipe.output_dir)
+        for f in files
+            path = joinpath(root, f)
+            _is_strippable_object(path) && push!(objects, path)
+        end
+    end
+    before = sum(filesize, objects; init = 0)
+    for path in objects
+        cmd = _strip_command(path)
+        verbose && println(cmd)
+        # Artifacts are copied read-only from the depot; `strip` rewrites the
+        # file through a temporary in its directory, so both need write
+        # permission for the duration.
+        dir = dirname(path)
+        dir_mode, file_mode = filemode(dir), filemode(path)
+        chmod(dir, dir_mode | 0o200); chmod(path, file_mode | 0o200)
+        try
+            run(cmd)
+        finally
+            chmod(path, file_mode); chmod(dir, dir_mode)
+        end
+    end
+    after = sum(filesize, objects; init = 0)
+    if !quiet
+        println("Stripped $(length(objects)) bundled binaries: ",
+                PackageCompiler.pretty_byte_str(before), " -> ", PackageCompiler.pretty_byte_str(after))
+    end
+    return objects
 end
 
 function remove_unnecessary_libraries(recipe::BundleRecipe)

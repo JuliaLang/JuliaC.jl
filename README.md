@@ -65,6 +65,8 @@ julia --project -e "using JuliaC; JuliaC.main(ARGS)" -- \
 - `--bundle <dir>`: Copy required Julia libs/stdlibs and artifacts next to the output; also sets a relative rpath.
 - `--bundle-lazy-artifacts`: Also copy lazy artifacts into the bundle (off by default; opt in
   when your dependencies download artifacts on first use).
+- `--strip`: Strip the symbol and debug tables from every binary in the bundle with the
+  system `strip` (typically halves the bundle; crash backtraces into the runtime lose names).
 - `--trim[=mode]`: Enable code trimming (e.g. `--trim=safe`). Use `--trim=no` to disable.
 - `--compile-ccallable`: Export `ccallable` entrypoints (see C-callable section).
 - `--experimental`: Forwarded to Julia; required for `--trim` on some builds.

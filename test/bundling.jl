@@ -153,3 +153,59 @@ end
         @test !ispath(bar)
     end
 end
+
+@testset "strip: object detection" begin
+    out = mktempdir()
+    elf = joinpath(out, "libelf.so.1"); write(elf, UInt8[0x7f, 0x45, 0x4c, 0x46, 0x02, 0x01])
+    macho = joinpath(out, "libmacho.dylib"); write(macho, UInt8[0xcf, 0xfa, 0xed, 0xfe, 0x07, 0x00])
+    pe = joinpath(out, "lib.dll"); write(pe, "MZ\x90\x00\x03")
+    archive = joinpath(out, "libfoo.a"); write(archive, "!<arch>\n")
+    script = joinpath(out, "libgcc_s.so"); write(script, "/* GNU ld script */\nINPUT(libgcc_s.so.1 -lgcc)\n")
+    tiny = joinpath(out, "tiny"); write(tiny, "\x7fE")
+    cert = joinpath(out, "cert.pem"); write(cert, "-----BEGIN CERTIFICATE-----\n")
+    symlink("libelf.so.1", joinpath(out, "libelf.so"))
+    @test JuliaC._is_strippable_object(elf)
+    @test JuliaC._is_strippable_object(macho)
+    @test JuliaC._is_strippable_object(pe)
+    @test !JuliaC._is_strippable_object(archive)
+    @test !JuliaC._is_strippable_object(script)
+    @test !JuliaC._is_strippable_object(tiny)
+    @test !JuliaC._is_strippable_object(cert)
+    @test !JuliaC._is_strippable_object(joinpath(out, "libelf.so"))   # symlink: stripped via its target
+    @test !JuliaC._is_strippable_object(out)                          # directory
+    @test !JuliaC._is_strippable_object(joinpath(out, "missing"))
+end
+
+# Strip a copy of the running Julia's own runtime library in place, through
+# the same pass the bundle step uses, and check it stays loadable.
+if Sys.which("strip") !== nothing
+@testset "strip: bundle pass" begin
+    out = mktempdir()
+    libdir = joinpath(out, "lib", "julia"); mkpath(libdir)
+    src = Libdl.dlpath("libjulia-internal")
+    dest = joinpath(libdir, basename(src)); cp(src, dest; follow_symlinks = true)
+    symlink(basename(src), joinpath(libdir, "libjulia-internal-link.so"))
+    write(joinpath(libdir, "libgcc_s.so"), "INPUT(libgcc_s.so.1)\n")
+    mkpath(joinpath(out, "share", "julia")); write(joinpath(out, "share", "julia", "cert.pem"), "x")
+    before = filesize(dest)
+    # Bundled artifacts arrive read-only (file and directory), as in the depot.
+    chmod(dest, 0o444); chmod(libdir, 0o555)
+    recipe = JuliaC.BundleRecipe(output_dir = out, strip = true)
+    recipe.link_recipe.image_recipe.quiet = true
+    stripped = JuliaC._strip_bundle!(recipe)
+    @test stripped == [dest]
+    @test filesize(dest) < before
+    @test filemode(dest) & 0o777 == 0o444
+    @test filemode(libdir) & 0o777 == 0o555
+    chmod(libdir, 0o755)
+    @test read(joinpath(libdir, "libgcc_s.so"), String) == "INPUT(libgcc_s.so.1)\n"
+    # The dynamic symbol table survives: the library still loads and exports.
+    h = Libdl.dlopen(dest, Libdl.RTLD_LOCAL | Libdl.RTLD_LAZY)
+    try
+        @test Libdl.dlsym(h, :jl_get_ptls_states; throw_error = false) !== nothing ||
+              Libdl.dlsym(h, :jl_gc_enable; throw_error = false) !== nothing
+    finally
+        Libdl.dlclose(h)
+    end
+end
+end
