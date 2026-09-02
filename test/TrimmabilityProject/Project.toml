@@ -4,6 +4,7 @@ version = "0.1.0"
 
 [deps]
 HostCPUFeatures = "3e5b6fbb-0976-4d2c-9146-d79de83f2fb0"
+LinearAlgebra = "37e2e46d-f89d-539d-b4ee-838fcccc9c8e"
 Sockets = "6462fe0b-24de-5631-8697-dd941f90decc"
 
 [compat]
