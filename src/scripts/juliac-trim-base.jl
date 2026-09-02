@@ -256,3 +256,16 @@ end
         end
     end
 end
+
+# A `LazyLibrary` on-load callback given as a Julia callable is a dynamic call
+# the trim verifier cannot resolve; the closed world refuses it (C entry
+# points registered through `_on_load_c_callback` are unaffected).
+@static if isdefined(Base.Libc.Libdl, :_invoke_on_load_callback)
+    @eval Base.Libc.Libdl begin
+        @noinline _invoke_on_load_callback(@nospecialize(cb)) = error(
+            "LazyLibrary on_load_callback of type `", typeof(cb).name.name,
+            "` is not supported under --trim; register a C entry point via ",
+            "_on_load_c_callback instead"
+        )
+    end
+end
