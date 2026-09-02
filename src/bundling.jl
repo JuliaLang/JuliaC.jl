@@ -368,8 +368,11 @@ function _filter_unreferenced_libraries!(recipe::BundleRecipe, records::Dict{Str
     end
     while !isempty(worklist)
         obj = pop!(worklist)
+        # A candidate need not be an ELF object (`libgcc_s.so` is a linker
+        # script); patchelf's complaint about one is not the user's concern.
         needed = try
-            split(read(`$(Patchelf_jll.patchelf()) --print-needed $(obj)`, String))
+            split(read(pipeline(`$(Patchelf_jll.patchelf()) --print-needed $(obj)`;
+                                stderr = devnull), String))
         catch
             continue
         end
