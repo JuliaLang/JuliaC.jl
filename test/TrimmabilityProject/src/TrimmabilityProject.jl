@@ -3,6 +3,7 @@ module TrimmabilityProject
 
 using HostCPUFeatures
 using Sockets
+using LinearAlgebra
 
 world::String = "world!"
 const str = OncePerProcess{String}() do
@@ -82,6 +83,15 @@ function _test_cat()
     return _cat1 + _cat2 + _cat3 + _cat4 + _cat5 + _cat6 + _cat7
 end
 
+# reductions with `init` nested in a generator reduction
+function _test_nested_reductions()
+    v = [1.0, 0.0, 2.0]
+    counted = maximum(count(!iszero, v .* i) for i in 1:3)
+    summed = sum(x -> sum(y -> y * x, v; init = 0.0), v; init = 0.0)
+    normed = maximum(norm(v .* i, 1) for i in 1:3)
+    return string("nested reductions: ", counted, " ", summed, " ", normed)
+end
+
 function @main(args::Vector{String})::Cint
     println(Core.stdout, str())
     println(Core.stdout, PROGRAM_FILE)
@@ -101,6 +111,7 @@ function @main(args::Vector{String})::Cint
     # e = reduce(xor, rand(Int, 10))
 
     println(Core.stdout, _test_cat())
+    println(Core.stdout, _test_nested_reductions())
 
     try
         sock = connect("localhost", 4900)

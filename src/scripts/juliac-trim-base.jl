@@ -95,8 +95,15 @@ end
     mapreduce(f::F, op::F2, A::AbstractArrayOrBroadcasted...; kw...) where {F, F2} =
         reduce(op, map(f, A...); kw...)
 
-    _mapreduce_dim(f::F, op::F2, nt, A::AbstractArrayOrBroadcasted, ::Colon) where {F, F2} =
-        mapfoldl_impl(f, op, nt, A)
+    function _mapreduce_dim(f::F, op::F2, nt, A::AbstractArrayOrBroadcasted, ::Colon) where {F, F2}
+        y = iterate(A)
+        y === nothing && return nt
+        v = op(nt, f(y[1]))
+        for x in Iterators.rest(A, y[2])
+            v = op(v, f(x))
+        end
+        return v
+    end
 
     _mapreduce_dim(f::F, op::F2, ::_InitialValue, A::AbstractArrayOrBroadcasted, ::Colon) where {F, F2} =
         _mapreduce(f, op, IndexStyle(A), A)
