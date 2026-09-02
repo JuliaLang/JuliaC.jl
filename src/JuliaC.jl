@@ -85,6 +85,9 @@ end
 
 include("compiling.jl")
 include("linking.jl")
+# The `--link-native` resolution pass runs in the target process, but its
+# JLL.toml record helpers also serve the bundle step.
+include(joinpath("scripts", "juliac-link-native.jl"))
 include("bundling.jl")
 include("patchversion.jl")
 include("privatize_common.jl")

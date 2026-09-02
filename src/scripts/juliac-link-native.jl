@@ -21,7 +21,9 @@
 # This runs before any user code (and therefore before any ccall lowering),
 # in the target process, so record resolution sees the target project's
 # load path. Records are consumed as data; the JLL modules themselves are
-# not loaded here.
+# not loaded here. The driver includes this file too, for the record helpers
+# (`select_build`, `build_library_entries`, `build_artifact_hash`) its bundle
+# step uses to prune artifacts.
 
 module JuliaCLinkNative
 

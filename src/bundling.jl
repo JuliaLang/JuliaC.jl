@@ -174,52 +174,99 @@ end
 _shlib_stem(name::String) =
     replace(name, r"\.so(\.\d+)*$|(\.\d+)*\.dylib$|\.dylib$|(-\d+)?\.dll$" => "")
 
-# Map every product dlid declared by this installation's stdlib JLL.toml
-# records to the sonames of its dynamic libraries (across all builds; an
-# over-approximation is safe — sonames for other platforms simply match no
-# bundled file).
-function _stdlib_dlid_sonames()
-    map = Dict{String, Vector{String}}()
-    for stdlib in readdir(Sys.STDLIB; join = true)
-        record_path = joinpath(stdlib, "JLL.toml")
+# A JLL package of the compiled project together with its `JLL.toml` record
+# and the record's build for this host (`nothing` when the record has none).
+struct JLLRecord
+    uuid::String          # lowercase, as it appears in identity keys
+    name::String
+    record::Dict{String, Any}
+    build::Union{Dict{String, Any}, Nothing}
+end
+
+# Every package of the compiled project's environment that ships a
+# `JLL.toml` record, keyed by lowercase UUID. Stdlib JLLs carry no record in
+# this Julia installation and so are absent; identified libraries without a
+# record fall back to their declared name below.
+function _collect_jll_records(ctx)
+    host = Base.BinaryPlatforms.HostPlatform()
+    records = Dict{String, JLLRecord}()
+    for pkg in PackageCompiler.load_all_deps(ctx)
+        pkg.uuid === nothing && continue
+        src = PackageCompiler.source_path(ctx, pkg)
+        src === nothing && continue
+        record_path = joinpath(src, "JLL.toml")
         isfile(record_path) || continue
         record = try
             TOML.parsefile(record_path)
         catch
             continue
         end
-        products = get(record, "products", nothing)
-        products isa Dict || continue
-        dlids = Dict{String, String}(String(name) => get(p, "dlid", "")
-                                     for (name, p) in products if p isa Dict)
-        for build in get(record, "builds", Any[])
-            bprods = get(build, "products", nothing)
-            bprods isa Dict || continue
-            for (name, p) in bprods
-                dlid = get(dlids, String(name), "")
-                isempty(dlid) && continue
-                dyn = get(p, "dynamic", nothing)
-                dyn isa Dict || continue
-                soname = get(dyn, "soname", nothing)
-                soname isa String || continue
-                push!(get!(Vector{String}, map, lowercase(dlid)), soname)
+        haskey(record, "builds") || continue
+        build = try
+            JuliaCLinkNative.select_build(record, host)
+        catch
+            nothing
+        end
+        uuid = lowercase(string(pkg.uuid))
+        records[uuid] = JLLRecord(uuid, String(pkg.name), record, build)
+    end
+    return records
+end
+
+# Split an identity key "<uuid>:<product>" (see `library_identity_key` in the
+# resolution pass) into its two coordinates, or `nothing`.
+function _split_identity_key(key::AbstractString)
+    idx = findfirst(':', key)
+    idx === nothing && return nothing
+    return lowercase(String(key[1:prevind(key, idx)])), String(key[nextind(key, idx):end])
+end
+
+# The library product entries of a record's host build that carry `name`,
+# as (linkage, entry).
+function _product_entries(rec::JLLRecord, name::AbstractString)
+    rec.build === nothing && return Tuple{String, Any}[]
+    return [(linkage, p) for (pname, linkage, p) in JuliaCLinkNative.build_library_entries(rec.build)
+            if pname == name]
+end
+
+# The sonames a foreign-deps manifest group refers to. An identified group
+# (`library_id` = "<uuid>:<product>") names a `LazyLibrary` product whose
+# file name is not its declared name; the merged-schema record of its
+# package states the soname. A group without an identity is a ccall on a
+# literal library string, which is the file name (or its stem) itself, and
+# that is also the fallback for an identified library whose package ships no
+# record.
+function _manifest_group_sonames(name::AbstractString, group, records::Dict{String, JLLRecord})
+    lid = group isa Dict ? get(group, "library_id", nothing) : nothing
+    if lid isa String
+        coords = _split_identity_key(lid)
+        if coords !== nothing
+            rec = get(records, coords[1], nothing)
+            if rec !== nothing
+                sonames = String[]
+                for (linkage, p) in _product_entries(rec, coords[2])
+                    linkage == "dynamic" || continue
+                    soname = get(p, "soname", nothing)
+                    soname isa String && push!(sonames, soname)
+                end
+                isempty(sonames) || return sonames
             end
         end
     end
-    return map
+    return [String(name)]
 end
 
 """
 Remove bundled shared libraries the trimmed image cannot reference. Under
 `--trim` the foreign-deps manifest records the image's complete ccall
 surface, so the keep set is computable: the runtime's own libraries, every
-library the manifest references (by soname or, for `LazyLibrary`s, by dlid
-resolved through the stdlib JLL.toml records), every library named in the
+library the manifest references (by soname or, for `LazyLibrary`s, by
+identity resolved through the package's JLL.toml record), every library named in the
 link-inputs manifest, and the transitive `DT_NEEDED` closure of all of the
 above within the bundle. Everything else is removed, with a log of what was
 dropped. ELF-only for now; no-op elsewhere or when the manifest is absent.
 """
-function _filter_unreferenced_libraries!(recipe::BundleRecipe)
+function _filter_unreferenced_libraries!(recipe::BundleRecipe, records::Dict{String, JLLRecord})
     Sys.islinux() || return
     image_recipe = recipe.link_recipe.image_recipe
     is_trim_enabled(image_recipe) || return
@@ -248,12 +295,12 @@ function _filter_unreferenced_libraries!(recipe::BundleRecipe)
 
     # Referenced stems from the foreign-deps manifest.
     manifest = JSON_parsefile(manifest_path)
-    dlid_sonames = _stdlib_dlid_sonames()
+    groups = get(manifest, "libraries", Dict{String, Any}())
     keep_stems = Set{String}(["libjulia", "libjulia-internal", "libjulia-codegen", "sys"])
-    for name in keys(get(manifest, "libraries", Dict{String, Any}()))
+    for (name, group) in pairs(groups)
         startswith(name, "<") && continue  # runtime pseudo-libraries
-        for soname in get(dlid_sonames, lowercase(name), [String(name)])
-            push!(keep_stems, _shlib_stem(String(soname)))
+        for soname in _manifest_group_sonames(name, group, records)
+            push!(keep_stems, _shlib_stem(soname))
         end
     end
     # Libraries named by the link step (dynamic natively-linked sonames are
@@ -286,8 +333,8 @@ function _filter_unreferenced_libraries!(recipe::BundleRecipe)
     # record dependency. If LBT is in the image with lazy sites, its
     # provider must ship too. (Under --link-native-blas the LBT sites are
     # native and this correctly does not fire.)
-    lbt_lazy = any(pairs(get(manifest, "libraries", Dict{String, Any}()))) do (name, group)
-        sonames = get(dlid_sonames, lowercase(String(name)), String[])
+    lbt_lazy = any(pairs(groups)) do (name, group)
+        sonames = _manifest_group_sonames(name, group, records)
         any(s -> _shlib_stem(s) == "libblastrampoline", sonames) || return false
         any(sym -> get(sym, "linkage", "") == "lazy", get(group, "symbols", Any[]))
     end
@@ -503,6 +550,7 @@ function bundle_products(recipe::BundleRecipe)
     # Bundle from the temporary project, where we compiled from
     @assert !isempty(image_recipe.instantiated_project) "project was not copied / instantiated"
     ctx2 = PackageCompiler.create_pkg_context(image_recipe.instantiated_project)
+    records = _collect_jll_records(ctx2)
     stdlibs = unique(vcat(PackageCompiler.gather_stdlibs_project(ctx2),
                           intersect(PackageCompiler._STDLIBS, map(x->x.name, Base._sysimage_modules))))
     libs_info = PackageCompiler.bundle_julia_libraries(recipe.output_dir, stdlibs; quiet)
@@ -558,7 +606,7 @@ function bundle_products(recipe::BundleRecipe)
 
     # Under --trim, drop bundled libraries the image cannot reference (the
     # foreign-deps manifest is its complete ccall surface).
-    _filter_unreferenced_libraries!(recipe)
+    _filter_unreferenced_libraries!(recipe, records)
 
     # Determine where to place the built product within the bundle
     outname = recipe.link_recipe.outname

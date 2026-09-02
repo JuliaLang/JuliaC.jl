@@ -4,6 +4,7 @@ version = "0.3.8"
 authors = ["gbaraldi <baraldigabriel@gmail.com>"]
 
 [deps]
+Artifacts = "56f22d72-fd6d-98f1-02f0-08ddc0907c33"
 LazyArtifacts = "4af54fe1-eca0-43a8-85a7-787d91b784e3"
 Libdl = "8f399da3-3557-5675-b5ff-fb832c97cbdb"
 Mmap = "a63ad114-7e13-5084-954f-fe012c677804"
@@ -17,6 +18,7 @@ StructIO = "53d494c1-5632-5724-8f4c-31dff12d585f"
 TOML = "fa267f1f-6049-4f14-aa54-33bafae1ed76"
 
 [compat]
+Artifacts = "1"
 LazyArtifacts = "1"
 Libdl = "1"
 Mmap = "1"
