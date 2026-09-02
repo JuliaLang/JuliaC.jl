@@ -400,6 +400,180 @@ function _filter_unreferenced_libraries!(recipe::BundleRecipe, records::Dict{Str
     return
 end
 
+# One bundled artifact's pruning decision (see `_artifact_prune_plan`).
+struct ArtifactPrune
+    hash::String       # the bundled directory name (hex tree hash)
+    package::String
+    drop::Bool         # remove the whole artifact directory
+    # When not dropping: (product, path of its shared library within the
+    # artifact) for every statically linked product; the file and its
+    # soname/symlink chain are removed.
+    remove::Vector{Tuple{String, String}}
+end
+
+# Products of artifact-located libraries the link step provided natively,
+# per package uuid: statically (linked into the image) and dynamically
+# (flattened into the private library directory by
+# `_bundle_native_artifact_libs!`).
+function _native_artifact_products(inputs)
+    static = Dict{String, Set{String}}()
+    dynamic = Dict{String, Set{String}}()
+    for lib in get(inputs, "libraries", Any[])
+        lib isa Dict || continue
+        get(lib, "location", "") == "artifact" || continue
+        coords = _split_identity_key(String(get(lib, "dlid", "")))
+        coords === nothing && continue
+        linkage = get(lib, "linkage", "")
+        target = linkage == "static" ? static : linkage == "dynamic" ? dynamic : nothing
+        target === nothing && continue
+        push!(get!(Set{String}, target, coords[1]), coords[2])
+    end
+    return static, dynamic
+end
+
+# (uuid, product) of every identified library the manifest reaches lazily
+# (its `LazyLibrary` is dlopened at run time), closed over the dependency
+# edges its record declares: a `LazyLibrary` dlopens its dependencies first,
+# so those are reached too even without ccall sites of their own.
+function _lazy_referenced_products(manifest, records::Dict{String, JLLRecord})
+    refs = Set{Tuple{String, String}}()
+    manifest === nothing && return refs
+    for (_, group) in pairs(get(manifest, "libraries", Dict{String, Any}()))
+        group isa Dict || continue
+        lid = get(group, "library_id", nothing)
+        lid isa String || continue
+        any(sym -> sym isa Dict && get(sym, "linkage", "") == "lazy",
+            get(group, "symbols", Any[])) || continue
+        coords = _split_identity_key(lid)
+        coords === nothing || push!(refs, coords)
+    end
+    byname = Dict{String, String}(rec.name => uuid for (uuid, rec) in records)
+    worklist = collect(refs)
+    while !isempty(worklist)
+        (uuid, prod) = pop!(worklist)
+        rec = get(records, uuid, nothing)
+        rec === nothing && continue
+        for (_, p) in _product_entries(rec, prod), dep in get(p, "deps", Any[])
+            dep isa String || continue
+            parts = split(dep, '.')
+            dep_uuid = length(parts) == 1 ? uuid :
+                       length(parts) == 2 ? get(byname, String(parts[1]), nothing) : nothing
+            dep_uuid === nothing && continue
+            edge = (String(dep_uuid), String(parts[end]))
+            edge in refs && continue
+            push!(refs, edge)
+            push!(worklist, edge)
+        end
+    end
+    return refs
+end
+
+"""
+Decide, for every bundled artifact of a JLL with a record, what the bundle
+may omit. A statically linked product's shared library is never loaded (the
+image carries its code), so it is removed whatever else the artifact holds.
+The whole artifact is dropped only when the image can reach nothing in it:
+`manifest` (the foreign-deps manifest, passed only under `--trim`, where it is
+the image's complete ccall surface) names no product of it lazily, no product
+of it was flattened into the private library directory as a natively-linked
+dynamic library, and the build declares no non-library products (file and
+executable products are reached through paths the manifest cannot see). The
+decision is a per-artifact referenced-ness check; `--link-native` on its own
+(without `--trim`) only removes the statically linked shared libraries.
+"""
+function _artifact_prune_plan(records::Dict{String, JLLRecord}, inputs, manifest)
+    static, dynamic = _native_artifact_products(inputs)
+    lazy = _lazy_referenced_products(manifest, records)
+    plan = ArtifactPrune[]
+    for (uuid, rec) in records
+        rec.build === nothing && continue
+        hash = JuliaCLinkNative.build_artifact_hash(rec.build)
+        hash === nothing && continue  # a bundled build ships no artifact
+        entries = JuliaCLinkNative.build_library_entries(rec.build)
+        libs = unique(String[name for (name, _, _) in entries])
+        has_other_products = any(get(rec.build, "products", Any[])) do p
+            p isa Dict && get(p, "type", "library") != "library"
+        end
+        s = get(static, uuid, Set{String}())
+        d = get(dynamic, uuid, Set{String}())
+        reached = any(l -> l in d || (uuid, l) in lazy, libs)
+        drop = manifest !== nothing && !has_other_products && !reached
+        remove = Tuple{String, String}[]
+        if !drop
+            for (name, linkage, p) in entries
+                (name in s && linkage == "dynamic") || continue
+                path = get(p, "path", nothing)
+                path isa String && push!(remove, (name, path))
+            end
+        end
+        (drop || !isempty(remove)) &&
+            push!(plan, ArtifactPrune(bytes2hex(hash.bytes), rec.name, drop, remove))
+    end
+    return sort!(plan; by = a -> a.hash)
+end
+
+# Whether `f` is the shared library with stem `stem`, or one of its versioned
+# names or symlinks (`libfoo.so`, `libfoo.so.3`, `libfoo.so.3.7.11`,
+# `libfoo.3.dylib`, `libfoo-3.dll`), and not a different library sharing the
+# prefix (`libfoof.so`) nor the static archive (`libfoo.a`).
+function _is_shlib_named(stem::AbstractString, f::AbstractString)
+    quoted = replace(stem, r"([\\.^$|?*+()\[\]{}])" => s"\\\1")
+    return occursin(Regex("^" * quoted * raw"((\.\d+)*\.(so|dylib)(\.\d+)*|(-\d+)?\.dll)$"), f)
+end
+
+function _apply_artifact_prune!(output_dir::String, plan::Vector{ArtifactPrune}; quiet::Bool = false)
+    artifacts_dir = joinpath(output_dir, "share", "julia", "artifacts")
+    dropped = String[]
+    removed = String[]
+    for a in plan
+        dir = joinpath(artifacts_dir, a.hash)
+        isdir(dir) || continue
+        if a.drop
+            rm(dir; recursive = true, force = true)
+            push!(dropped, "$(a.hash) ($(a.package))")
+            continue
+        end
+        for (product, relpath) in a.remove
+            libdir = joinpath(dir, dirname(relpath))
+            isdir(libdir) || continue
+            stem = _shlib_stem(basename(relpath))
+            for f in readdir(libdir)
+                _is_shlib_named(stem, f) || continue
+                rm(joinpath(libdir, f); force = true)
+                push!(removed, "$(a.package).$(product): $(joinpath(dirname(relpath), f))")
+            end
+        end
+    end
+    if !quiet
+        if !isempty(dropped)
+            println("Pruned $(length(dropped)) bundled artifacts the image cannot reach:")
+            foreach(d -> println("  - ", d), dropped)
+        end
+        if !isempty(removed)
+            println("Pruned $(length(removed)) shared libraries of statically linked products from bundled artifacts:")
+            foreach(r -> println("  - ", r), removed)
+        end
+    end
+    return dropped, removed
+end
+
+# Apply `_artifact_prune_plan` to the bundle. The link-inputs manifest
+# supplies the natively-provided products; the foreign-deps manifest is
+# consulted only under `--trim`, where it is complete.
+function _prune_bundled_artifacts!(recipe::BundleRecipe, records::Dict{String, JLLRecord})
+    image_recipe = recipe.link_recipe.image_recipe
+    inputs_path = image_recipe.link_inputs_path
+    inputs = inputs_path !== nothing && isfile(inputs_path) ? TOML.parsefile(inputs_path) :
+             Dict{String, Any}()
+    manifest_path = image_recipe.export_foreign_deps
+    manifest = is_trim_enabled(image_recipe) && manifest_path !== nothing && isfile(manifest_path) ?
+               JSON_parsefile(manifest_path) : nothing
+    plan = _artifact_prune_plan(records, inputs, manifest)
+    isempty(plan) && return
+    _apply_artifact_prune!(recipe.output_dir, plan; quiet = image_recipe.quiet)
+    return
+end
+
 # Minimal JSON reader for the foreign-deps manifest (flat structure of
 # objects, arrays, and strings) to avoid a JSON package dependency.
 function JSON_parsefile(path::String)
@@ -607,6 +781,11 @@ function bundle_products(recipe::BundleRecipe)
     # Under --trim, drop bundled libraries the image cannot reference (the
     # foreign-deps manifest is its complete ccall surface).
     _filter_unreferenced_libraries!(recipe, records)
+
+    # Bundled artifacts of JLLs: drop the shared libraries of statically
+    # linked products and, under --trim, whole artifacts the image cannot
+    # reach.
+    _prune_bundled_artifacts!(recipe, records)
 
     # Determine where to place the built product within the bundle
     outname = recipe.link_recipe.outname
