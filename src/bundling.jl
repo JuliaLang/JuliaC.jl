@@ -80,7 +80,7 @@ function bundle_products(recipe::BundleRecipe)
     # Perform library removal operations
     remove_unnecessary_libraries(recipe)
 
-    # Optional privatization of libjulia: single entry point dispatching per-OS (disabled by default)
+    # Opt-in, via `--privatize`.
     if is_privatize_enabled(recipe)
         privatize_libjulia!(recipe)
     end
@@ -126,6 +126,8 @@ function privatize_libjulia!(recipe::BundleRecipe)
         privatize_libjulia_macos!(recipe, salt)
     elseif Sys.islinux()
         privatize_libjulia_linux!(recipe, salt)
+    elseif Sys.iswindows()
+        privatize_libjulia_windows!(recipe, salt)
     else
         @warn "Privatization not implemented for this OS"
     end
