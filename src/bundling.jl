@@ -1,9 +1,14 @@
+function should_be_bundled(recipe::BundleRecipe)
+    output_type = recipe.link_recipe.image_recipe.output_type
+    return !(output_type == "--output-o" || output_type == "--output-bc")
+end
+
 function bundle_products(recipe::BundleRecipe)
     bundle_start = time_ns()
 
     # Validate that bundling makes sense for this output type
-    output_type = recipe.link_recipe.image_recipe.output_type
-    if output_type == "--output-o" || output_type == "--output-bc"
+    if !should_be_bundled(recipe)
+        output_type = recipe.link_recipe.image_recipe.output_type
         error("Cannot bundle $(output_type) output type. $(output_type) generates object files/archives that don't require bundling. Use compile_products() directly instead of bundle_products().")
     end
 
