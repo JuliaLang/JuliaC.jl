@@ -15,8 +15,8 @@
 #
 # A library's identity is not read from the record: it is the `LibraryID`
 # the package's wrapper declares, `LibraryID(<package UUID>, "<product>")`,
-# which this pass reconstructs from the same two coordinates and registers as
-# the key "<uuid>:<product>".
+# which this pass reconstructs from the same two coordinates and registers
+# with `jl_set_foreign_link_policy`.
 #
 # This runs before any user code (and therefore before any ccall lowering),
 # in the target process, so record resolution sees the target project's
@@ -34,7 +34,7 @@ struct ResolvedLibrary
     spec::String        # the request that pulled this in (or "<dep of X>")
     package::String
     product::String
-    dlid::String        # identity key "<package uuid>:<product>" (see `library_identity_key`)
+    package_uuid::String # the package's UUID (lowercase text); with `product`, its `LibraryID`
     dlname::String      # the dynamic library's soname (identification / bundle filtering)
     # Absolute path of the file to link, or `nothing` for a library whose
     # sites are bound natively but whose symbols are satisfied by other link
@@ -47,9 +47,13 @@ struct ResolvedLibrary
     # symbols instead (see `--link-native-blas`).
     replaced_with::Union{String, Nothing}
 end
-ResolvedLibrary(spec, package, product, dlid, dlname, path, linkage, location, system_deps) =
-    ResolvedLibrary(spec, package, product, dlid, dlname, path, linkage, location,
+ResolvedLibrary(spec, package, product, package_uuid, dlname, path, linkage, location, system_deps) =
+    ResolvedLibrary(spec, package, product, package_uuid, dlname, path, linkage, location,
                     system_deps, nothing)
+
+# The identity the package's wrapper declares for this library.
+library_identity(lib::ResolvedLibrary) =
+    Base.Libc.Libdl.LibraryID(Base.UUID(lib.package_uuid), lib.product)
 
 # Locate a package's source directory without loading the package.
 function locate_pkgid(pkgname::AbstractString)
@@ -105,13 +109,13 @@ function build_library_entries(build)
     return entries
 end
 
-# The identity key of a package's library product: the package UUID and the
-# product name, exactly as the wrapper declares `LibraryID(uuid, name)`.
-function library_identity_key(pkgname::AbstractString, prodname::AbstractString)
+# The UUID of a package, as lowercase text: with a product name it is the
+# `LibraryID(uuid, name)` the package's wrapper declares.
+function package_uuid(pkgname::AbstractString)
     pkgid = locate_pkgid(pkgname)
     pkgid.uuid === nothing &&
         error("--link-native: package $pkgname has no UUID, so its libraries have no identity")
-    return lowercase(string(pkgid.uuid)) * ":" * String(prodname)
+    return lowercase(string(pkgid.uuid))
 end
 
 # Where a build's product paths resolve: "artifact" when the build's
@@ -258,7 +262,7 @@ function resolve_library(spec::String, pkgname::String, prodname::String,
     end
     (dynentry === nothing && stentry === nothing) &&
         error("--link-native: $pkgname.$prodname is not available for this platform")
-    dlid = library_identity_key(pkgname, prodname)
+    uuid = package_uuid(pkgname)
 
     if static
         # Static linkage: link the archive declared by the entry. Its
@@ -279,7 +283,7 @@ function resolve_library(spec::String, pkgname::String, prodname::String,
         # none, so fall back to the archive name.
         dlname = dynentry === nothing ? basename(relpath) :
             something(get(dynentry, "soname", nothing), basename(relpath))
-        lib = ResolvedLibrary(spec, pkgname, prodname, dlid, dlname, path,
+        lib = ResolvedLibrary(spec, pkgname, prodname, uuid, dlname, path,
                               "static", location, system_deps)
         return lib, deps
     else
@@ -296,7 +300,7 @@ function resolve_library(spec::String, pkgname::String, prodname::String,
         path = joinpath(base, get(dynentry, "path", soname))
         isfile(path) ||
             error("--link-native: $pkgname.$prodname resolved to $path, which does not exist")
-        lib = ResolvedLibrary(spec, pkgname, prodname, dlid, soname, path,
+        lib = ResolvedLibrary(spec, pkgname, prodname, uuid, soname, path,
                               "dynamic", location, String[])
         return lib, Vector{String}(get(dynentry, "deps", String[]))
     end
@@ -321,10 +325,10 @@ function resolve_and_register!(specs::Vector{String}, link_inputs_path::String;
     # Runtime support check up front, so the failure mode is a clear error
     # rather than a missing-symbol crash at registration time.
     let handle = Base.Libc.Libdl.dlopen("libjulia-internal"; throw_error=false)
-        if handle === nothing ||
-                Base.Libc.Libdl.dlsym(handle, :jl_add_native_link_lib_id; throw_error=false) === nothing
-            error("--link-native requires a Julia runtime with id-keyed native-link " *
-                  "support; this Julia ($(VERSION)) does not provide it.")
+        if handle === nothing || !isdefined(Base.Libc.Libdl, :LibraryID) ||
+                Base.Libc.Libdl.dlsym(handle, :jl_set_foreign_link_policy; throw_error=false) === nothing
+            error("--link-native requires a Julia runtime with a foreign link policy " *
+                  "keyed on `LibraryID`; this Julia ($(VERSION)) does not provide it.")
         end
     end
 
@@ -364,7 +368,7 @@ function resolve_and_register!(specs::Vector{String}, link_inputs_path::String;
             lib, _ = resolve_library("<blas trampoline>", BLAS_TRAMPOLINE_PACKAGE,
                                      String(prodname), record, host)
             push!(substituted, ResolvedLibrary(lib.spec, lib.package, lib.product,
-                                               lib.dlid, lib.dlname, nothing,
+                                               lib.package_uuid, lib.dlname, nothing,
                                                "none", lib.location, String[]))
             push!(seen, (BLAS_TRAMPOLINE_PACKAGE, String(prodname)))
         end
@@ -423,7 +427,7 @@ function resolve_and_register!(specs::Vector{String}, link_inputs_path::String;
             target = resolved[idx].package * "." * resolved[idx].product
             for (i, lib) in pairs(substituted)
                 substituted[i] = ResolvedLibrary(lib.spec, lib.package, lib.product,
-                                                 lib.dlid, lib.dlname, lib.path,
+                                                 lib.package_uuid, lib.dlname, lib.path,
                                                  lib.linkage, lib.location,
                                                  lib.system_deps, target)
             end
@@ -431,7 +435,7 @@ function resolve_and_register!(specs::Vector{String}, link_inputs_path::String;
     end
     append!(resolved, substituted)
     for lib in resolved
-        ccall(:jl_add_native_link_lib_id, Cvoid, (Cstring,), lib.dlid)
+        ccall(:jl_set_foreign_link_policy, Cvoid, (Any, Cint), library_identity(lib), true)
     end
 
     # TOML link-inputs manifest for the driver's link step. Values are
@@ -445,7 +449,7 @@ function resolve_and_register!(specs::Vector{String}, link_inputs_path::String;
             println(io, "spec = \"", esc(lib.spec), "\"")
             println(io, "package = \"", esc(lib.package), "\"")
             println(io, "product = \"", esc(lib.product), "\"")
-            println(io, "dlid = \"", esc(lib.dlid), "\"")
+            println(io, "package_uuid = \"", esc(lib.package_uuid), "\"")
             println(io, "dlname = \"", esc(lib.dlname), "\"")
             println(io, "linkage = \"", esc(lib.linkage), "\"")
             println(io, "location = \"", esc(lib.location), "\"")

@@ -213,14 +213,6 @@ function _collect_jll_records(ctx)
     return records
 end
 
-# Split an identity key "<uuid>:<product>" (see `library_identity_key` in the
-# resolution pass) into its two coordinates, or `nothing`.
-function _split_identity_key(key::AbstractString)
-    idx = findfirst(':', key)
-    idx === nothing && return nothing
-    return lowercase(String(key[1:prevind(key, idx)])), String(key[nextind(key, idx):end])
-end
-
 # The library product entries of a record's host build that carry `name`,
 # as (linkage, entry).
 function _product_entries(rec::JLLRecord, name::AbstractString)
@@ -229,36 +221,34 @@ function _product_entries(rec::JLLRecord, name::AbstractString)
             if pname == name]
 end
 
-# The sonames a foreign-deps manifest group refers to. An identified group
-# (`library_id` = "<uuid>:<product>") names a `LazyLibrary` product whose
-# file name is not its declared name; the merged-schema record of its
-# package states the soname. A group without an identity is a ccall on a
-# literal library string, which is the file name (or its stem) itself, and
-# that is also the fallback for an identified library whose package ships no
-# record.
-function _manifest_group_sonames(name::AbstractString, group, records::Dict{String, JLLRecord})
-    lid = group isa Dict ? get(group, "library_id", nothing) : nothing
-    if lid isa String
-        coords = _split_identity_key(lid)
-        if coords !== nothing
-            rec = get(records, coords[1], nothing)
-            if rec !== nothing
-                sonames = String[]
-                for (linkage, p) in _product_entries(rec, coords[2])
-                    linkage == "dynamic" || continue
-                    soname = get(p, "soname", nothing)
-                    soname isa String && push!(sonames, soname)
-                end
-                isempty(sonames) || return sonames
+# The sonames a used-symbols manifest group refers to. An identified group
+# (`package_uuid` and `library`, the coordinates of a `LibraryID`) names a
+# `LazyLibrary` product whose file name is not its declared name; the
+# merged-schema record of its package states the soname. A group without an
+# identity is a ccall on a literal library string, which is the file name (or
+# its stem) itself, and that is also the fallback for an identified library
+# whose package ships no record. A group with no library at all (a symbol
+# looked up across the process) refers to no file.
+function _manifest_group_sonames(package_uuid, library, records::Dict{String, JLLRecord})
+    library === nothing && return String[]
+    if package_uuid !== nothing
+        rec = get(records, package_uuid, nothing)
+        if rec !== nothing
+            sonames = String[]
+            for (linkage, p) in _product_entries(rec, library)
+                linkage == "dynamic" || continue
+                soname = get(p, "soname", nothing)
+                soname isa String && push!(sonames, soname)
             end
+            isempty(sonames) || return sonames
         end
     end
-    return [String(name)]
+    return [String(library)]
 end
 
 """
 Remove bundled shared libraries the trimmed image cannot reference. Under
-`--trim` the foreign-deps manifest records the image's complete ccall
+`--trim` the used-symbols manifest records the image's complete ccall
 surface, so the keep set is computable: the runtime's own libraries, every
 library the manifest references (by soname or, for `LazyLibrary`s, by
 identity resolved through the package's JLL.toml record), every library named in the
@@ -270,7 +260,7 @@ function _filter_unreferenced_libraries!(recipe::BundleRecipe, records::Dict{Str
     Sys.islinux() || return
     image_recipe = recipe.link_recipe.image_recipe
     is_trim_enabled(image_recipe) || return
-    manifest_path = image_recipe.export_foreign_deps
+    manifest_path = image_recipe.export_used_symbols
     (manifest_path === nothing || !isfile(manifest_path)) && return
 
     libdir = joinpath(recipe.output_dir, recipe.libdir)
@@ -293,13 +283,11 @@ function _filter_unreferenced_libraries!(recipe::BundleRecipe, records::Dict{Str
         end
     end
 
-    # Referenced stems from the foreign-deps manifest.
-    manifest = JSON_parsefile(manifest_path)
-    groups = get(manifest, "libraries", Dict{String, Any}())
+    # Referenced stems from the used-symbols manifest.
+    groups = _manifest_library_groups(JSON_parsefile(manifest_path))
     keep_stems = Set{String}(["libjulia", "libjulia-internal", "libjulia-codegen", "sys"])
-    for (name, group) in pairs(groups)
-        startswith(name, "<") && continue  # runtime pseudo-libraries
-        for soname in _manifest_group_sonames(name, group, records)
+    for (package_uuid, library, _) in groups
+        for soname in _manifest_group_sonames(package_uuid, library, records)
             push!(keep_stems, _shlib_stem(soname))
         end
     end
@@ -333,10 +321,10 @@ function _filter_unreferenced_libraries!(recipe::BundleRecipe, records::Dict{Str
     # record dependency. If LBT is in the image with lazy sites, its
     # provider must ship too. (Under --link-native-blas the LBT sites are
     # native and this correctly does not fire.)
-    lbt_lazy = any(pairs(groups)) do (name, group)
-        sonames = _manifest_group_sonames(name, group, records)
+    lbt_lazy = any(groups) do (package_uuid, library, symbols)
+        sonames = _manifest_group_sonames(package_uuid, library, records)
         any(s -> _shlib_stem(s) == "libblastrampoline", sonames) || return false
-        any(sym -> get(sym, "linkage", "") == "lazy", get(group, "symbols", Any[]))
+        any(sym -> sym isa Dict && get(sym, "linkage", "") == "lazy", symbols)
     end
     if lbt_lazy
         provider_record = joinpath(Sys.STDLIB, "OpenBLAS_jll", "JLL.toml")
@@ -428,12 +416,13 @@ function _native_artifact_products(inputs)
     for lib in get(inputs, "libraries", Any[])
         lib isa Dict || continue
         get(lib, "location", "") == "artifact" || continue
-        coords = _split_identity_key(String(get(lib, "dlid", "")))
-        coords === nothing && continue
+        uuid = get(lib, "package_uuid", nothing)
+        product = get(lib, "product", nothing)
+        (uuid isa String && product isa String) || continue
         linkage = get(lib, "linkage", "")
         target = linkage == "static" ? static : linkage == "dynamic" ? dynamic : nothing
         target === nothing && continue
-        push!(get!(Set{String}, target, coords[1]), coords[2])
+        push!(get!(Set{String}, target, lowercase(uuid)), product)
     end
     return static, dynamic
 end
@@ -445,14 +434,10 @@ end
 function _lazy_referenced_products(manifest, records::Dict{String, JLLRecord})
     refs = Set{Tuple{String, String}}()
     manifest === nothing && return refs
-    for (_, group) in pairs(get(manifest, "libraries", Dict{String, Any}()))
-        group isa Dict || continue
-        lid = get(group, "library_id", nothing)
-        lid isa String || continue
-        any(sym -> sym isa Dict && get(sym, "linkage", "") == "lazy",
-            get(group, "symbols", Any[])) || continue
-        coords = _split_identity_key(lid)
-        coords === nothing || push!(refs, coords)
+    for (package_uuid, library, symbols) in _manifest_library_groups(manifest)
+        (package_uuid === nothing || library === nothing) && continue
+        any(sym -> sym isa Dict && get(sym, "linkage", "") == "lazy", symbols) || continue
+        push!(refs, (package_uuid, library))
     end
     byname = Dict{String, String}(rec.name => uuid for (uuid, rec) in records)
     worklist = collect(refs)
@@ -480,7 +465,7 @@ Decide, for every bundled artifact of a JLL with a record, what the bundle
 may omit. A statically linked product's shared library is never loaded (the
 image carries its code), so it is removed whatever else the artifact holds.
 The whole artifact is dropped only when the image can reach nothing in it:
-`manifest` (the foreign-deps manifest, passed only under `--trim`, where it is
+`manifest` (the used-symbols manifest, passed only under `--trim`, where it is
 the image's complete ccall surface) names no product of it lazily, no product
 of it was flattened into the private library directory as a natively-linked
 dynamic library, and the build declares no non-library products (file and
@@ -581,7 +566,7 @@ function _apply_artifact_prune!(output_dir::String, plan::Vector{ArtifactPrune};
 end
 
 # Apply `_artifact_prune_plan` to the bundle. The link-inputs manifest
-# supplies the natively-provided products; the foreign-deps manifest is
+# supplies the natively-provided products; the used-symbols manifest is
 # consulted only under `--trim`, where it is complete. Static library
 # products go from every kept artifact regardless.
 function _prune_bundled_artifacts!(recipe::BundleRecipe, records::Dict{String, JLLRecord})
@@ -589,7 +574,7 @@ function _prune_bundled_artifacts!(recipe::BundleRecipe, records::Dict{String, J
     inputs_path = image_recipe.link_inputs_path
     inputs = inputs_path !== nothing && isfile(inputs_path) ? TOML.parsefile(inputs_path) :
              Dict{String, Any}()
-    manifest_path = image_recipe.export_foreign_deps
+    manifest_path = image_recipe.export_used_symbols
     manifest = is_trim_enabled(image_recipe) && manifest_path !== nothing && isfile(manifest_path) ?
                JSON_parsefile(manifest_path) : nothing
     plan = _artifact_prune_plan(records, inputs, manifest)
@@ -598,8 +583,34 @@ function _prune_bundled_artifacts!(recipe::BundleRecipe, records::Dict{String, J
     return
 end
 
-# Minimal JSON reader for the foreign-deps manifest (flat structure of
-# objects, arrays, and strings) to avoid a JSON package dependency.
+# The library groups of a used-symbols manifest, as (package_uuid, library,
+# symbols). `package_uuid` (lowercase text) is `nothing` for a library with no
+# declared identity; `library` is `nothing` for a symbol looked up across the
+# process. An entry of the manifest's `unresolved` section that still names
+# its library (a symbol chosen at run time) counts as a group of one.
+function _manifest_library_groups(manifest)
+    groups = Tuple{Union{String, Nothing}, Union{String, Nothing}, Vector{Any}}[]
+    manifest isa Dict || return groups
+    function coordinates(group)
+        uuid = get(group, "package_uuid", nothing)
+        library = get(group, "library", nothing)
+        return (uuid isa String ? lowercase(uuid) : nothing, library isa String ? library : nothing)
+    end
+    for group in get(manifest, "libraries", Any[])
+        group isa Dict || continue
+        symbols = get(group, "symbols", Any[])
+        push!(groups, (coordinates(group)..., symbols isa Vector ? symbols : Any[]))
+    end
+    for entry in get(manifest, "unresolved", Any[])
+        (entry isa Dict && haskey(entry, "library")) || continue
+        push!(groups, (coordinates(entry)..., Any[entry]))
+    end
+    return groups
+end
+
+# Minimal JSON reader for the used-symbols manifest (flat structure of
+# objects, arrays, strings, numbers, and literals) to avoid a JSON package
+# dependency.
 function JSON_parsefile(path::String)
     s = read(path, String)
     pos = Ref(1)
@@ -803,7 +814,7 @@ function bundle_products(recipe::BundleRecipe)
     _patch_native_consumer_needed!(recipe)
 
     # Under --trim, drop bundled libraries the image cannot reference (the
-    # foreign-deps manifest is its complete ccall surface).
+    # used-symbols manifest is its complete ccall surface).
     _filter_unreferenced_libraries!(recipe, records)
 
     # Bundled artifacts of JLLs: drop the shared libraries of statically

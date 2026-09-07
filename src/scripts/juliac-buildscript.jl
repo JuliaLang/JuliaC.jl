@@ -35,9 +35,9 @@ end
 #                                  package's JLL.toml record.
 #   --link-inputs <path>         : Where to write the link-inputs manifest consumed
 #                                  by the driver's link step (required with --link-native).
-#   --export-foreign-deps <path> : Write a JSON manifest of every ccall/cglobal site.
+#   --export-used-symbols <path> : Write a JSON manifest of every ccall/cglobal site.
 source_path, output_type, add_ccallables, use_loaded_libs, scripts_dir, export_abi,
-        link_native_libs, link_native_blas, link_inputs_path, export_foreign_deps = let
+        link_native_libs, link_native_blas, link_inputs_path, export_used_symbols = let
     source_path = ""
     output_type = ""
     add_ccallables = false
@@ -47,7 +47,7 @@ source_path, output_type, add_ccallables, use_loaded_libs, scripts_dir, export_a
     link_native_libs = String[]
     link_native_blas = nothing
     link_inputs_path = nothing
-    export_foreign_deps = nothing
+    export_used_symbols = nothing
     it = Iterators.Stateful(ARGS)
     for arg in it
         if startswith(arg, "--source=")
@@ -87,19 +87,19 @@ source_path, output_type, add_ccallables, use_loaded_libs, scripts_dir, export_a
         elseif arg == "--link-inputs"
             link_inputs_path = popfirst!(it)
             link_inputs_path === nothing && error("Missing value for --link-inputs")
-        elseif startswith(arg, "--export-foreign-deps=")
-            export_foreign_deps = split(arg, "=", limit=2)[2]
-        elseif arg == "--export-foreign-deps"
-            export_foreign_deps = popfirst!(it)
-            export_foreign_deps === nothing && error("Missing value for --export-foreign-deps")
+        elseif startswith(arg, "--export-used-symbols=")
+            export_used_symbols = split(arg, "=", limit=2)[2]
+        elseif arg == "--export-used-symbols"
+            export_used_symbols = popfirst!(it)
+            export_used_symbols === nothing && error("Missing value for --export-used-symbols")
         end
     end
     source_path == "" && error("Missing required --source <path>")
     (source_path, output_type, add_ccallables, use_loaded_libs, scripts_dir, export_abi,
-     link_native_libs, link_native_blas, link_inputs_path, export_foreign_deps)
+     link_native_libs, link_native_blas, link_inputs_path, export_used_symbols)
 end
 
-# Native-link policy / foreign-deps export. Both must be registered with the
+# Foreign link policy / used-symbols export. Both must be registered with the
 # runtime before any user code (and therefore any ccall lowering) runs.
 if !isempty(link_native_libs) || link_native_blas !== nothing
     link_inputs_path !== nothing ||
@@ -108,15 +108,15 @@ if !isempty(link_native_libs) || link_native_blas !== nothing
     JuliaCLinkNative.resolve_and_register!(link_native_libs, String(link_inputs_path);
         blas_provider = link_native_blas === nothing ? nothing : String(link_native_blas))
 end
-if export_foreign_deps !== nothing
+if export_used_symbols !== nothing
     let handle = Base.Libc.Libdl.dlopen("libjulia-internal"; throw_error=false)
         if handle === nothing ||
-                Base.Libc.Libdl.dlsym(handle, :jl_set_foreign_deps_export_path; throw_error=false) === nothing
-            error("--export-foreign-deps requires a Julia runtime with native-link support; " *
+                Base.Libc.Libdl.dlsym(handle, :jl_set_export_foreign_symbol_usage; throw_error=false) === nothing
+            error("--export-used-symbols requires a Julia runtime that exports foreign symbol usage; " *
                   "this Julia ($(VERSION)) does not provide it.")
         end
     end
-    ccall(:jl_set_foreign_deps_export_path, Cvoid, (Cstring,), export_foreign_deps)
+    ccall(:jl_set_export_foreign_symbol_usage, Cvoid, (Cstring,), export_used_symbols)
 end
 
 # Load user code

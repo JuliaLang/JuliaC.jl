@@ -205,11 +205,11 @@ function compile_products(recipe::ImageRecipe)
     end
     if !isempty(recipe.link_native_libs) || recipe.link_native_blas !== nothing
         # The buildscript resolves these package specs through their
-        # JLL.toml records and registers the resolved dlids with the
-        # runtime before any user code (and therefore any ccall lowering)
-        # runs; the AOT stub-emission pass consults that table to decide
+        # JLL.toml records and registers the resolved identities with the
+        # runtime's foreign link policy before any user code (and therefore
+        # any ccall lowering) runs; codegen consults that policy to decide
         # which ccalls to bind natively. The resolved libraries are written
-        # to the link-inputs manifest for the link step, and a foreign-deps
+        # to the link-inputs manifest for the link step, and a used-symbols
         # manifest is always requested so the driver can verify afterwards
         # that every requested library was actually bound natively.
         recipe.link_inputs_path = recipe.img_path * ".link-inputs.toml"
@@ -222,15 +222,15 @@ function compile_products(recipe::ImageRecipe)
         cmd = `$cmd --link-inputs $(recipe.link_inputs_path)`
     end
     if (is_trim_enabled(recipe) || !isempty(recipe.link_native_libs) ||
-            recipe.link_native_blas !== nothing) && recipe.export_foreign_deps === nothing
-        # The driver needs the foreign-deps manifest to verify native
+            recipe.link_native_blas !== nothing) && recipe.export_used_symbols === nothing
+        # The driver needs the used-symbols manifest to verify native
         # linkage; under --trim it is additionally the complete ccall
         # surface of the image, used to prune bundled libraries the image
         # cannot reference.
-        recipe.export_foreign_deps = recipe.img_path * ".foreign-deps.json"
+        recipe.export_used_symbols = recipe.img_path * ".used-symbols.json"
     end
-    if recipe.export_foreign_deps !== nothing
-        cmd = `$cmd --export-foreign-deps $(abspath(recipe.export_foreign_deps))`
+    if recipe.export_used_symbols !== nothing
+        cmd = `$cmd --export-used-symbols $(abspath(recipe.export_used_symbols))`
     end
 
     # Threading
@@ -350,33 +350,31 @@ function _compile_lbt_shim(recipe::ImageRecipe)
 end
 
 """
-Cross-check the foreign-deps manifest against the link-inputs manifest: every
-dlid the resolution pass registered must appear only with `native` linkage.
-The parse is deliberately minimal and coupled to the fixed formatting of the
-runtime's manifest emitter (`aot_export_foreign_deps`): groups are keyed by
-the frozen dlid, and each symbol line carries its linkage.
+Cross-check the used-symbols manifest against the link-inputs manifest: every
+library the resolution pass registered (by package UUID and product name, the
+two coordinates of its `LibraryID`) must appear only with `native` linkage.
 """
 function _verify_native_linkage(recipe::ImageRecipe)
     inputs_path = recipe.link_inputs_path
-    manifest_path = recipe.export_foreign_deps
+    manifest_path = recipe.export_used_symbols
     (inputs_path === nothing || !isfile(inputs_path)) &&
         error("--link-native: buildscript did not produce the link-inputs manifest")
     (manifest_path === nothing || !isfile(manifest_path)) &&
-        error("--link-native: no foreign-deps manifest was produced to verify against")
+        error("--link-native: no used-symbols manifest was produced to verify against")
     inputs = TOML.parsefile(inputs_path)
-    manifest = read(manifest_path, String)
+    groups = _manifest_library_groups(JSON_parsefile(manifest_path))
     failures = String[]
     for lib in get(inputs, "libraries", Any[])
-        dlid = lib["dlid"]
-        # The group for this dlid, if any: from its key line to the next
-        # group key (4-space indented quoted key) or the end of the object.
-        m = findfirst("\"$(dlid)\":", manifest)
-        m === nothing && continue # no sites referenced this library
-        rest = manifest[last(m):end]
-        nextgroup = findfirst(r"\n    \"", rest)
-        group = nextgroup === nothing ? rest : rest[1:first(nextgroup)]
-        for sym in eachmatch(r"\{\"symbol\": (\"[^\"]*\"), [^}]*\"linkage\": \"lazy\"\}", group)
-            push!(failures, "$(lib["package"]).$(lib["product"]): $(sym.captures[1])")
+        uuid = lowercase(String(lib["package_uuid"]))
+        product = String(lib["product"])
+        for (package_uuid, library, symbols) in groups
+            (package_uuid == uuid && library == product) || continue
+            for sym in symbols
+                (sym isa Dict && get(sym, "linkage", "") == "lazy") || continue
+                name = get(sym, "symbol", nothing)
+                push!(failures, "$(lib["package"]).$(lib["product"]): " *
+                                (name isa String ? name : "<symbol chosen at run time>"))
+            end
         end
     end
     if !isempty(failures)

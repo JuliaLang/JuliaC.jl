@@ -50,7 +50,7 @@ Base.@kwdef mutable struct ImageRecipe
     # consumed by the link step. Set by compile_products.
     link_inputs_path::Union{String, Nothing} = nothing
     # If set, write a JSON manifest of every ccall/cglobal usage site here.
-    export_foreign_deps::Union{String, Nothing} = nothing
+    export_used_symbols::Union{String, Nothing} = nothing
     # Julia CLI option overrides applied via jl_parse_opts in a constructor before jl_init.
     # Keys and values use Julia CLI syntax (e.g. "handle-signals" => "no", "threads" => "1").
     # Auto-populated with safe defaults for --output-lib.
@@ -148,7 +148,7 @@ function _print_usage(io::IO=stdout)
     println(io, "                              plus JuliaC's LBT control-API shim, removing the")
     println(io, "                              trampoline layer from the executable. Same spec format")
     println(io, "                              as --link-native.")
-    println(io, "  --export-foreign-deps <path> Write a JSON manifest of every ccall/cglobal usage site")
+    println(io, "  --export-used-symbols <path> Write a JSON manifest of every ccall/cglobal usage site")
     println(io, "                              to <path>, covering both native-linked and lazy-stub sites.")
     println(io, "  --experimental              Forwarded to Julia (needed for --trim)")
     println(io, "  --verbose                   Print commands and timings")
@@ -231,12 +231,12 @@ function _parse_cli_args(args::Vector{String})
             for name in split(names, ','; keepempty=false)
                 push!(image_recipe.link_native_libs, _strip_linkage_mode(String(name)))
             end
-        elseif startswith(arg, "--export-foreign-deps")
-            if startswith(arg, "--export-foreign-deps=")
-                image_recipe.export_foreign_deps = split(arg, '='; limit=2)[2]
+        elseif startswith(arg, "--export-used-symbols")
+            if startswith(arg, "--export-used-symbols=")
+                image_recipe.export_used_symbols = split(arg, '='; limit=2)[2]
             else
-                i == length(args) && error("--export-foreign-deps requires an argument")
-                image_recipe.export_foreign_deps = args[i+1]
+                i == length(args) && error("--export-used-symbols requires an argument")
+                image_recipe.export_used_symbols = args[i+1]
                 i += 1
             end
         elseif startswith(arg, "--project")
