@@ -4,6 +4,9 @@
 const RPATH_JULIA = "@julia"
 const RPATH_BUNDLE = "@bundle"
 
+# `base_token` below already opens the quote (for the literal `$ORIGIN`)
+escape_rpath_body(path::AbstractString) = replace(path, "'" => "'\\''")
+
 function get_rpath(recipe::LinkRecipe)
     rpath = recipe.rpath
 
@@ -13,9 +16,9 @@ function get_rpath(recipe::LinkRecipe)
 
     if rpath == RPATH_JULIA
         # Handle @julia magic string - absolute paths to Julia installation
-        libdir = JuliaConfig.libDir()
-        private_libdir = JuliaConfig.private_libDir()
-        return "-Wl,-rpath,'$(libdir)' -Wl,-rpath,'$(private_libdir)'"
+        libdir = JuliaConfig.shell_escape(JuliaConfig.libDir())
+        private_libdir = JuliaConfig.shell_escape(JuliaConfig.private_libDir())
+        return "-Wl,-rpath,$(libdir) -Wl,-rpath,$(private_libdir)"
     elseif rpath == RPATH_BUNDLE
         # Handle @bundle magic string - standard bundle layout
         rpath = joinpath("..", "lib")
@@ -33,16 +36,25 @@ function get_rpath(recipe::LinkRecipe)
     # Emit rpaths for both base path and julia subdirectory
     priv_path = joinpath(rpath, "julia")
     base_path = rpath
-    flag1 = base_token * base_path * "'"
-    flag2 = base_token * priv_path * "'"
+    # Escape: `link_products` splits this flag string again
+    flag1 = base_token * escape_rpath_body(base_path) * "'"
+    flag2 = base_token * escape_rpath_body(priv_path) * "'"
     return string(flag1, " ", flag2)
+end
+
+# A `JULIA_CC` naming an existing file is used verbatim, so paths with spaces
+# (or Windows backslashes) survive; anything else is parsed as a command line,
+# e.g. `JULIA_CC="ccache gcc"`.
+function parse_compiler_env(cc::AbstractString)
+    isfile(cc) && return Cmd(String[String(cc)])
+    return Cmd(Base.shell_split(cc))
 end
 
 function get_compiler_cmd(; cplusplus::Bool=false)
     cc = get(ENV, "JULIA_CC", nothing)
     path = nothing
     if cc !== nothing
-        compiler_cmd = Cmd(Base.shell_split(cc))
+        compiler_cmd = parse_compiler_env(cc)
         path = nothing
     else
         @static if Sys.iswindows()

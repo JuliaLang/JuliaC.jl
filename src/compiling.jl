@@ -82,6 +82,10 @@ function run_with_suppressed_output(cmd::Base.AbstractCmd; quiet::Bool)
     end
 end
 
+# One flag per entry, passed verbatim: splitting on whitespace would corrupt
+# flags carrying a path with spaces.
+normalize_user_flags(flags) = String[String(f) for f in flags]
+
 function compile_products(recipe::ImageRecipe)
     # Only strip IR / metadata if not `--trim=no`
     strip_args = String[]
@@ -236,15 +240,7 @@ function compile_products(recipe::ImageRecipe)
         compiler_cmd = JuliaC.get_compiler_cmd()
         # Ensure include flags are passed as separate tokens
         default_cflags = Base.shell_split(JuliaC.JuliaConfig.cflags(; framework=false))
-        user_cflags = String[]
-        for cf in recipe.cflags
-            if startswith(cf, "-I") && cf != "-I"
-                push!(user_cflags, cf)
-            else
-                append!(user_cflags, split(cf))
-            end
-        end
-        cflags = isempty(user_cflags) ? default_cflags : vcat(default_cflags, user_cflags)
+        cflags = vcat(default_cflags, normalize_user_flags(recipe.cflags))
         for csrc in recipe.c_sources
             obj = replace(csrc, ".c" => ".o")
             try

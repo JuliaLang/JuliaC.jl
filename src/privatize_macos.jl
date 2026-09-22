@@ -18,6 +18,23 @@ function privatize_libjulia_macos!(recipe::BundleRecipe, salt::String)
     end
 end
 
+# `otool -L` prints `<install name> (compatibility version X, current version Y)`.
+# Install names can contain spaces, so strip the suffix rather than cut at a space.
+const OTOOL_VERSION_SUFFIX = r"\s+\(compatibility version [^()]*\)$"
+
+function parse_otool_deps(out::AbstractString)
+    lines = split(out, '\n')
+    deps = String[]
+    for i in 2:length(lines)  # line 1 is the binary's own name
+        line = strip(lines[i])
+        isempty(line) && continue
+        dep = strip(replace(line, OTOOL_VERSION_SUFFIX => ""))
+        isempty(dep) && continue
+        push!(deps, String(dep))
+    end
+    return deps
+end
+
 # macOS-specific dependency extraction
 function get_dependencies_macos(bin::String)
     out = try
@@ -25,17 +42,7 @@ function get_dependencies_macos(bin::String)
     catch
         return String[]
     end
-    lines = split(out, '\n')
-    deps = String[]
-    for i in 2:length(lines)
-        line = strip(lines[i])
-        isempty(line) && continue
-        sp = findfirst(' ', line)
-        if sp !== nothing
-            push!(deps, strip(line[1:prevind(line, first(sp))]))
-        end
-    end
-    return deps
+    return parse_otool_deps(out)
 end
 
 function install_name_id!(libpath::String, new_id::String)

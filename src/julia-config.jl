@@ -12,7 +12,8 @@ const options = [
 ];
 
 function shell_escape(str)
-    str = replace(str, "'" => "'\''")
+    # POSIX single-quote escaping, as parsed back by `Base.shell_split`
+    str = replace(str, "'" => "'\\''")
     return "'$str'"
 end
 
