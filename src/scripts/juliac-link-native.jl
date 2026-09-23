@@ -226,7 +226,7 @@ end
 
 function resolve_library(spec::String, pkgname::String, prodname::String,
                          record::Dict{String,Any}, host::AbstractPlatform;
-                         static::Bool = false)
+                         static::Union{Bool, Symbol} = false)
     build = select_build(record, host)
     build === nothing &&
         error("--link-native: $pkgname's record has no build for this platform")
@@ -269,6 +269,12 @@ function resolve_library(spec::String, pkgname::String, prodname::String,
         error("--link-native: $pkgname.$prodname is not available for this platform")
     uuid = package_uuid(pkgname)
 
+    # `:auto` (from `static:all`): the archive when the record declares one
+    # for this platform and it is installed, the shared library otherwise.
+    if static === :auto
+        relpath = stentry === nothing ? nothing : get(stentry, "path", nothing)
+        static = relpath isa String && isfile(joinpath(base, relpath))
+    end
     if static
         # Static linkage: link the archive declared by the entry. Its
         # dependency edges and system-library closure come from the record,
@@ -311,6 +317,40 @@ function resolve_library(spec::String, pkgname::String, prodname::String,
     end
 end
 
+# Every package of the target environment that ships a `JLL.toml` record:
+# the packages of the active project's manifest, and the bundled stdlib
+# JLLs (a manifest package shadows a stdlib of the same UUID, as for
+# loading). This is what `--link-native static:all` expands to.
+function environment_record_packages()
+    names = String[]
+    seen_uuids = Set{Base.UUID}()
+    project = Base.active_project()
+    manifest = project === nothing ? nothing : Base.project_file_manifest_path(project)
+    if manifest !== nothing && isfile(manifest)
+        for (name, entries) in Base.get_deps(Base.parsed_toml(manifest))
+            for entry in entries
+                uuid = get(entry, "uuid", nothing)
+                uuid isa String || continue
+                pkgid = Base.PkgId(Base.UUID(uuid), String(name))
+                src = Base.locate_package(pkgid)
+                src === nothing && continue
+                isfile(joinpath(dirname(dirname(src)), "JLL.toml")) || continue
+                push!(seen_uuids, pkgid.uuid)
+                push!(names, String(name))
+            end
+        end
+    end
+    for name in readdir(Sys.STDLIB)
+        dir = joinpath(Sys.STDLIB, name)
+        isfile(joinpath(dir, "JLL.toml")) || continue
+        uuid = get(Base.parsed_toml(joinpath(dir, "Project.toml")), "uuid", nothing)
+        uuid isa String || continue
+        Base.UUID(uuid) in seen_uuids && continue
+        push!(names, name)
+    end
+    return sort!(unique!(names))
+end
+
 # The package whose call sites `--link-native-blas` redirects: every
 # libblastrampoline site is bound natively, and its symbols are satisfied by
 # the provider's library plus JuliaC's LBT control-API shim.
@@ -342,8 +382,13 @@ function resolve_and_register!(specs::Vector{String}, link_inputs_path::String;
     record_cache = Dict{String,Any}()
     resolved = ResolvedLibrary[]
     seen = Set{Tuple{String,String}}()  # (package, product)
-    # (spec, package, product, static); empty product = every product
-    queue = Tuple{String,String,String,Bool}[]
+    # (spec, package, product, static); empty product = every product;
+    # static may be :auto (see `all`)
+    queue = Tuple{String,String,String,Union{Bool,Symbol}}[]
+    dep_mode = nothing # provisioning of dependency edges; set once `all` is known
+    # every dependency edge seen, dependency => owners ("Pkg.product" keys),
+    # recorded whether or not the dependency was already resolved
+    needed_by = Dict{String,Vector{String}}()
 
     # A spec may carry a linkage-mode prefix: `static:` selects the record's
     # static library for the named products (their dependency edges are
@@ -386,25 +431,42 @@ function resolve_and_register!(specs::Vector{String}, link_inputs_path::String;
                       length(parts) == 2 ? String(parts[2]) : "", static))
     end
 
+    # `all` (`static:all` or `dynamic:all`): every product of every package
+    # with a record, after the explicit specs so those take precedence for
+    # the products they name. Static means "where an archive exists".
+    all_mode = nothing
     for spec in specs
         bare, static = parse_mode(spec)
+        if bare == "all"
+            all_mode = static ? :auto : false
+            continue
+        end
         parts = split(bare, '.')
         length(parts) <= 2 ||
             error("--link-native: malformed spec `$spec` (expected `Pkg_jll` or `Pkg_jll.product`)")
         push!(queue, (bare, String(parts[1]),
                       length(parts) == 2 ? String(parts[2]) : "", static))
     end
+    if all_mode !== nothing
+        for pkgname in environment_record_packages()
+            pkgname == BLAS_TRAMPOLINE_PACKAGE && blas_provider !== nothing && continue
+            push!(queue, ("all", pkgname, "", all_mode))
+        end
+    end
 
     function enqueue_deps!(owner::String, pkgname::String, deps)
+        mode = dep_mode === nothing ? false : dep_mode
         for dep in deps
             depparts = split(dep, '.')
             if length(depparts) == 1
-                push!(queue, ("<dep of $owner>", pkgname, String(depparts[1]), false))
+                deppkg, depprod = pkgname, String(depparts[1])
             elseif length(depparts) == 2
-                push!(queue, ("<dep of $owner>", String(depparts[1]), String(depparts[2]), false))
+                deppkg, depprod = String(depparts[1]), String(depparts[2])
             else
                 error("--link-native: malformed dep edge `$dep` in $pkgname's record")
             end
+            push!(get!(Vector{String}, needed_by, deppkg * "." * depprod), owner)
+            push!(queue, ("<dep of $owner>", deppkg, depprod, mode))
         end
     end
     function drain!()
@@ -428,6 +490,7 @@ function resolve_and_register!(specs::Vector{String}, link_inputs_path::String;
             enqueue_deps!("$pkgname.$prodname", pkgname, deps)
         end
     end
+    dep_mode = all_mode
     drain!()
 
     # The Julia runtime itself (`--link-runtime=static`): the archive the
@@ -460,7 +523,7 @@ function resolve_and_register!(specs::Vector{String}, link_inputs_path::String;
                                         path, "static", "bundled",
                                         Vector{String}(get(entry, "system_deps", String[]));
                                         whole_archive = true))
-        enqueue_deps!("libjulia-internal", "julia", get(entry, "deps", String[]))
+        enqueue_deps!("julia.libjulia-internal", "julia", get(entry, "deps", String[]))
         drain!()
     end
 
@@ -504,6 +567,10 @@ function resolve_and_register!(specs::Vector{String}, link_inputs_path::String;
                 println(io, "replaced_with = \"", esc(lib.replaced_with), "\"")
             end
             lib.whole_archive && println(io, "whole_archive = true")
+            owners = get(needed_by, lib.package * "." * lib.product, nothing)
+            if owners !== nothing
+                println(io, "needed_by = [", join(("\"" * esc(o) * "\"" for o in unique(owners)), ", "), "]")
+            end
             if lib.path !== nothing
                 println(io, "path = \"", esc(lib.path), "\"")
             end

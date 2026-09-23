@@ -301,6 +301,13 @@ function compile_products(recipe::ImageRecipe)
     end
     obj = _compile_jl_options_shim(recipe.jl_options; verbose=recipe.verbose)
     push!(recipe.extra_objects, obj)
+    # `--link-native static:all` resolved every library with a record before
+    # anything was compiled; now that the image exists, keep only the ones it
+    # references (and what those need), so nothing unreferenced is linked in
+    # or shipped.
+    if any(spec -> chopprefix(spec, "static:") == "all", recipe.link_native_libs)
+        _prune_unreferenced_link_inputs!(recipe)
+    end
     # Verify the native-link policy took effect: every library requested via
     # --link-native must have all of its ccall/cglobal sites bound natively.
     # A site left at lazy lookup here would silently fall back at runtime.
@@ -350,6 +357,81 @@ function _compile_lbt_shim(recipe::ImageRecipe)
     run(cmdc)
     push!(recipe.extra_objects, obj)
     return nothing
+end
+
+"""
+Reduce the link-inputs manifest to the libraries the image can reach: those
+the used-symbols manifest references under their identity, the runtime
+archive, substituted entries, explicitly requested specs, and the transitive
+dependency closure of all of the above through the recorded `<dep of ...>`
+edges. Entries that only `all` pulled in and nothing references are dropped.
+"""
+function _prune_unreferenced_link_inputs!(recipe::ImageRecipe)
+    inputs_path = recipe.link_inputs_path
+    manifest_path = recipe.export_used_symbols
+    (inputs_path === nothing || !isfile(inputs_path)) && return
+    (manifest_path === nothing || !isfile(manifest_path)) && return
+    libs = get(TOML.parsefile(inputs_path), "libraries", Any[])
+    referenced = Set{Tuple{String,String}}()
+    for (package_uuid, library, _) in _manifest_library_groups(JSON_parsefile(manifest_path))
+        (package_uuid === nothing || library === nothing) && continue
+        push!(referenced, (package_uuid, library))
+    end
+    key(lib) = String(lib["package"]) * "." * String(lib["product"])
+    keep = Set{String}()
+    for lib in libs
+        spec = String(get(lib, "spec", ""))
+        if get(lib, "whole_archive", false) || haskey(lib, "replaced_with") ||
+                !(spec == "all" || startswith(spec, "<dep of ")) ||
+                (lowercase(String(get(lib, "package_uuid", ""))), String(lib["product"])) in referenced
+            push!(keep, key(lib))
+        end
+    end
+    # close over dependency edges: a dependency of a kept entry is kept
+    changed = true
+    while changed
+        changed = false
+        for lib in libs
+            k = key(lib)
+            k in keep && continue
+            if any(o -> String(o) in keep, get(lib, "needed_by", Any[]))
+                push!(keep, k); changed = true
+            end
+        end
+    end
+    kept = [lib for lib in libs if key(lib) in keep]
+    dropped = [key(lib) for lib in libs if !(key(lib) in keep)]
+    if !isempty(dropped) && !recipe.quiet
+        println("Not linking $(length(dropped)) libraries `static:all` resolved but the image does not reference:")
+        for k in sort(dropped)
+            println("  - ", k)
+        end
+    end
+    _write_link_inputs(inputs_path, kept)
+    return nothing
+end
+
+# Write link-inputs entries (as parsed) back in the manifest's TOML form.
+function _write_link_inputs(path::String, libs)
+    esc(s) = replace(String(s), '\\' => "\\\\", '"' => "\\\"")
+    open(path, "w") do io
+        println(io, "# Written by juliac's --link-native resolution pass; consumed by its link step.")
+        for lib in libs
+            println(io, "[[libraries]]")
+            for k in ("spec", "package", "product", "package_uuid", "dlname", "linkage", "location",
+                      "replaced_with", "path")
+                haskey(lib, k) && println(io, k, " = \"", esc(lib[k]), "\"")
+            end
+            if haskey(lib, "system_deps") && !isempty(lib["system_deps"])
+                println(io, "system_deps = [", join(("\"" * esc(d) * "\"" for d in lib["system_deps"]), ", "), "]")
+            end
+            get(lib, "whole_archive", false) && println(io, "whole_archive = true")
+            if haskey(lib, "needed_by") && !isempty(lib["needed_by"])
+                println(io, "needed_by = [", join(("\"" * esc(o) * "\"" for o in lib["needed_by"]), ", "), "]")
+            end
+            println(io)
+        end
+    end
 end
 
 """
