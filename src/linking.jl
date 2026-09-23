@@ -197,8 +197,8 @@ function link_products(recipe::LinkRecipe)
     end
     rpath_str = Base.shell_split(get_rpath(recipe))
     if image_recipe.static_runtime
-        image_recipe.output_type == "--output-exe" ||
-            error("--link-runtime=static is only supported for --output-exe")
+        image_recipe.output_type in ("--output-exe", "--output-lib") ||
+            error("--link-runtime=static is only supported for --output-exe and --output-lib")
         julia_libs = String[] # the runtime archive is a link input (see native_link_args)
     else
         julia_libs = Base.shell_split(Base.isdebugbuild() ? "-ljulia-debug -ljulia-internal-debug" : "-ljulia -ljulia-internal")
