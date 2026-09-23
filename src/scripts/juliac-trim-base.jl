@@ -274,50 +274,6 @@ end
     end
 end
 
-# A `ccall` on a `LazyLibrary` that is not bound natively opens the library on
-# first use through `Libdl.dlopen(::LazyLibrary)`, which the runtime invokes by
-# dynamic dispatch and the trim verifier therefore requires to be compiled and
-# clean. The Base method is not: `LazyLibrary.path` is an untyped field, so
-# `string(ll.path)` and the `dlopen` on its result are dynamic calls, and the
-# on-load callback is an untyped callable. Narrow both to what the closed world
-# admits: a `String` or `LazyLibraryPath` path (the latter through the
-# `string` override above), and no Julia-level on-load callback.
-@static if isdefined(Base.Libc.Libdl, :LazyLibrary)
-    @eval Base.Libc.Libdl begin
-        @noinline _throw_unsupported_lazy_path(@nospecialize(p)) = error(
-            "LazyLibrary path of type `", typeof(p).name.name,
-            "` is not supported under --trim; it must be a String or LazyLibraryPath")
-        @noinline _throw_unsupported_on_load_callback(@nospecialize(cb)) = error(
-            "LazyLibrary on_load_callback of type `", typeof(cb).name.name,
-            "` is not supported under --trim")
-        function _lazy_library_path(ll::LazyLibrary)
-            p = ll.path
-            return p isa String ? p :
-                   p isa LazyLibraryPath ? string(p) :
-                   _throw_unsupported_lazy_path(p)
-        end
-        function dlopen(ll::LazyLibrary, flags::Integer = ll.flags; kwargs...)
-            handle = @atomic :acquire ll.handle
-            if handle == C_NULL
-                @lock ll.lock begin
-                    if ll.handle == C_NULL
-                        for dep in ll.dependencies()
-                            dlopen(dep; kwargs...)
-                        end
-                        handle = dlopen(_lazy_library_path(ll), flags; kwargs...)
-                        @atomic :release ll.handle = handle
-                        cb = ll.on_load_callback
-                        cb === nothing || _throw_unsupported_on_load_callback(cb)
-                    else
-                        handle = @atomic :acquire ll.handle
-                    end
-                end
-            end
-            return handle
-        end
-    end
-end
-
 # A `LazyLibrary` on-load callback given as a Julia callable is a dynamic call
 # the trim verifier cannot resolve; the closed world refuses it (C entry
 # points registered through `_on_load_c_callback` are unaffected).
