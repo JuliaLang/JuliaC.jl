@@ -184,16 +184,33 @@ struct JLLRecord
 end
 
 # Every package of the compiled project's environment that ships a
-# `JLL.toml` record, keyed by lowercase UUID. Stdlib JLLs carry no record in
-# this Julia installation and so are absent; identified libraries without a
-# record fall back to their declared name below.
+# `JLL.toml` record, keyed by lowercase UUID, plus the records of the
+# bundled stdlib JLLs (Base itself calls into GMP, MPFR, PCRE2 and OpenLibm
+# under their identities, whether or not the project depends on the
+# wrappers). A project package shadows a stdlib of the same UUID, as it does
+# for loading. Identified libraries without a record fall back to their
+# declared name below.
 function _collect_jll_records(ctx)
     host = Base.BinaryPlatforms.HostPlatform()
     records = Dict{String, JLLRecord}()
+    sources = Tuple{Base.UUID, String, String}[]  # (uuid, name, source dir)
     for pkg in PackageCompiler.load_all_deps(ctx)
         pkg.uuid === nothing && continue
         src = PackageCompiler.source_path(ctx, pkg)
         src === nothing && continue
+        push!(sources, (pkg.uuid, String(pkg.name), src))
+    end
+    for name in readdir(Sys.STDLIB)
+        dir = joinpath(Sys.STDLIB, name)
+        isfile(joinpath(dir, "JLL.toml")) || continue
+        project = joinpath(dir, "Project.toml")
+        isfile(project) || continue
+        uuid = get(TOML.parsefile(project), "uuid", nothing)
+        uuid isa String || continue
+        any(((u, _, _),) -> u == Base.UUID(uuid), sources) && continue
+        push!(sources, (Base.UUID(uuid), name, dir))
+    end
+    for (pkg_uuid, pkg_name, src) in sources
         record_path = joinpath(src, "JLL.toml")
         isfile(record_path) || continue
         record = try
@@ -207,8 +224,8 @@ function _collect_jll_records(ctx)
         catch
             nothing
         end
-        uuid = lowercase(string(pkg.uuid))
-        records[uuid] = JLLRecord(uuid, String(pkg.name), record, build)
+        uuid = lowercase(string(pkg_uuid))
+        records[uuid] = JLLRecord(uuid, pkg_name, record, build)
     end
     return records
 end
@@ -285,8 +302,17 @@ function _filter_unreferenced_libraries!(recipe::BundleRecipe, records::Dict{Str
 
     # Referenced stems from the used-symbols manifest.
     groups = _manifest_library_groups(JSON_parsefile(manifest_path))
-    keep_stems = Set{String}(["libjulia", "libjulia-internal", "libjulia-codegen", "sys"])
+    # With the runtime linked statically the executable carries libjulia,
+    # libjulia-internal and the sysimage itself; the bundled copies are
+    # unreferenced like any other library.
+    keep_stems = image_recipe.static_runtime ? Set{String}() :
+        Set{String}(["libjulia", "libjulia-internal", "libjulia-codegen", "sys"])
     for (package_uuid, library, _) in groups
+        # The runtime's own symbols are in the executable when it is static.
+        if image_recipe.static_runtime && package_uuid === nothing &&
+                library in ("libjulia", "libjulia-internal")
+            continue
+        end
         for soname in _manifest_group_sonames(package_uuid, library, records)
             push!(keep_stems, _shlib_stem(soname))
         end
@@ -305,6 +331,7 @@ function _filter_unreferenced_libraries!(recipe::BundleRecipe, records::Dict{Str
     # neither the manifest nor DT_NEEDED sees it. Extract it from the
     # bundled libjulia.
     for (target, names) in candidates
+        image_recipe.static_runtime && break  # no loader; the archive's needs are in DT_NEEDED
         any(((_, n),) -> startswith(n, "libjulia.so"), names) || continue
         data = String(read(target))
         for m in eachmatch(r"(?:@?[A-Za-z0-9_.+\-]+\.so[A-Za-z0-9_.]*:)+", data)

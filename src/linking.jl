@@ -143,6 +143,51 @@ function native_link_args(recipe::LinkRecipe)
     return args
 end
 
+# Link inputs for `--link-runtime=static`: the runtime archive, linked whole
+# (Julia code reaches most of the runtime through `ccall` by name, which the
+# image resolves with `dlsym` on the executable, so nothing may be dropped),
+# followed by the libraries the archive references but does not fold in.
+# Archives shipped by the Julia installation are preferred over `-l` so the
+# executable's DT_NEEDED closure is the C library alone; the C++ runtime and
+# libatomic come from the compiler's static archives for the same reason.
+function static_runtime_link_args(recipe::LinkRecipe)
+    libdir = JuliaConfig.libDir()
+    archive = joinpath(libdir, Base.isdebugbuild() ? "libjulia-internal-debug.a" :
+                                                     "libjulia-internal.a")
+    isfile(archive) ||
+        error("--link-runtime=static: $(archive) not found; this Julia was built " *
+              "without the static runtime archive (`make -C src $(archive)`)")
+    args = String[]
+    push!(args, "-Wl," * Base.Linking.WHOLE_ARCHIVE)
+    push!(args, archive)
+    push!(args, "-Wl," * Base.Linking.NO_WHOLE_ARCHIVE)
+    # The runtime's own dependencies (src/Makefile: RT_LIBS), minus what the
+    # archive folds in. LLVM's Support library serves the runtime's target
+    # parsing and demangling even without codegen.
+    for name in ("LLVMSupport", "LLVMDemangle", "unwind", "zstd", "z")
+        a = joinpath(libdir, "lib" * name * ".a")
+        if isfile(a)
+            push!(args, a)
+        elseif Sys.islinux()
+            # No archive in the installation: take the system's static one
+            # if it has it (`-Bstatic` scopes to the `-l` between the markers).
+            append!(args, ["-Wl,-Bstatic", "-l" * name, "-Wl,-Bdynamic"])
+        else
+            push!(args, "-l" * name)
+        end
+    end
+    if Sys.islinux()
+        append!(args, ["-Wl,-Bstatic", "-lstdc++", "-latomic", "-Wl,-Bdynamic"])
+        # The compiler's unwinder support library, statically too, so that no
+        # libgcc_s ships for the runtime's sake.
+        push!(args, "-static-libgcc")
+        append!(args, ["-lrt", "-ldl", "-lpthread", "-lm"])
+    elseif Sys.isapple()
+        append!(args, ["-lc++", "-framework", "CoreFoundation"])
+    end
+    return args
+end
+
 function link_products(recipe::LinkRecipe)
     link_start = time_ns()
     image_recipe = recipe.image_recipe
@@ -176,7 +221,13 @@ function link_products(recipe::LinkRecipe)
         end
     end
     rpath_str = Base.shell_split(get_rpath(recipe))
-    julia_libs = Base.shell_split(Base.isdebugbuild() ? "-ljulia-debug -ljulia-internal-debug" : "-ljulia -ljulia-internal")
+    if image_recipe.static_runtime
+        image_recipe.output_type == "--output-exe" ||
+            error("--link-runtime=static is only supported for --output-exe")
+        julia_libs = static_runtime_link_args(recipe)
+    else
+        julia_libs = Base.shell_split(Base.isdebugbuild() ? "-ljulia-debug -ljulia-internal-debug" : "-ljulia -ljulia-internal")
+    end
     compiler_cmd = get_compiler_cmd()
     allflags = Base.shell_split(JuliaConfig.allflags(; framework=false, rpath=false))
     try

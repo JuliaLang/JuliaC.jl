@@ -49,6 +49,13 @@ Base.@kwdef mutable struct ImageRecipe
     # Path of the link-inputs manifest written by the resolution pass and
     # consumed by the link step. Set by compile_products.
     link_inputs_path::Union{String, Nothing} = nothing
+    # `--link-runtime=static`: link the Julia runtime itself into the
+    # executable. The image is linked against `libjulia-internal.a` (which
+    # folds in libuv, utf8proc, flisp, support and target parsing) instead of
+    # the `libjulia` loader and `libjulia-internal.so`; the sysimage is the
+    # image object already linked in whole. No Julia shared library ships in
+    # the bundle. Requires a Julia built with the static runtime archive.
+    static_runtime::Bool = false
     # If set, write a JSON manifest of every ccall/cglobal usage site here.
     export_used_symbols::Union{String, Nothing} = nothing
     # Julia CLI option overrides applied via jl_parse_opts in a constructor before jl_init.
@@ -143,6 +150,10 @@ function _print_usage(io::IO=stdout)
     println(io, "                              records' dependency edges. A spec may carry a linkage-mode")
     println(io, "                              prefix: `dynamic:` (the default) or `static:` (link the")
     println(io, "                              record's static library).")
+    println(io, "  --link-runtime <mode>       `dynamic` (default) links against the libjulia loader and")
+    println(io, "                              libjulia-internal shared library; `static` links the runtime")
+    println(io, "                              archive (libjulia-internal.a) into the executable, so no")
+    println(io, "                              Julia shared library ships.")
     println(io, "  --link-native-blas <spec>   Bind every libblastrampoline ccall site natively and")
     println(io, "                              satisfy it with this BLAS provider (e.g. `OpenBLAS_jll`)")
     println(io, "                              plus JuliaC's LBT control-API shim, removing the")
@@ -210,6 +221,17 @@ function _parse_cli_args(args::Vector{String})
             i == length(args) && error("--export-abi requires an argument")
             image_recipe.export_abi = args[i+1]
             i += 1
+        elseif startswith(arg, "--link-runtime")
+            if startswith(arg, "--link-runtime=")
+                mode = split(arg, '='; limit=2)[2]
+            else
+                i == length(args) && error("--link-runtime requires a mode (static or dynamic)")
+                mode = args[i+1]
+                i += 1
+            end
+            mode in ("static", "dynamic") ||
+                error("--link-runtime expects `static` or `dynamic`, got: $mode")
+            image_recipe.static_runtime = (mode == "static")
         elseif startswith(arg, "--link-native-blas")
             if startswith(arg, "--link-native-blas=")
                 spec = split(arg, '='; limit=2)[2]
