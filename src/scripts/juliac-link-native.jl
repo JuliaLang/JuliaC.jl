@@ -46,10 +46,15 @@ struct ResolvedLibrary
     # For an entry with no linkage: the "Package.product" that satisfies its
     # symbols instead (see `--link-native-blas`).
     replaced_with::Union{String, Nothing}
+    # A static archive to be linked whole: the Julia runtime, which Julia code
+    # reaches by symbol name through `dlsym` on the executable, so that no
+    # object of it may be discarded.
+    whole_archive::Bool
 end
-ResolvedLibrary(spec, package, product, package_uuid, dlname, path, linkage, location, system_deps) =
+ResolvedLibrary(spec, package, product, package_uuid, dlname, path, linkage, location, system_deps,
+                replaced_with = nothing; whole_archive::Bool = false) =
     ResolvedLibrary(spec, package, product, package_uuid, dlname, path, linkage, location,
-                    system_deps, nothing)
+                    system_deps, replaced_with, whole_archive)
 
 # The identity the package's wrapper declares for this library.
 library_identity(lib::ResolvedLibrary) =
@@ -241,7 +246,7 @@ function resolve_library(spec::String, pkgname::String, prodname::String,
         # installation that owns the record.
         bundled_path = build_bundled_path(build)
         base = bundled_path == "private_shlibdir" ? bundled_shlibdir() :
-               bundled_path == "private_libdir" ? dirname(bundled_shlibdir()) :
+               bundled_path == "private_libdir" ? dirname(Base.Libc.Libdl.dlpath("libjulia")) :
                bundled_path == "private_bindir" ? Sys.BINDIR :
                error("--link-native: $pkgname's record build names unsupported bundled_path $(repr(bundled_path))")
     end
@@ -321,7 +326,8 @@ libblastrampoline's identities — without linking libblastrampoline itself — 
 resolve the provider (and its closure) as ordinary native link inputs.
 """
 function resolve_and_register!(specs::Vector{String}, link_inputs_path::String;
-                               blas_provider::Union{String, Nothing} = nothing)
+                               blas_provider::Union{String, Nothing} = nothing,
+                               static_runtime::Bool = false)
     # Runtime support check up front, so the failure mode is a clear error
     # rather than a missing-symbol crash at registration time.
     let handle = Base.Libc.Libdl.dlopen("libjulia-internal"; throw_error=false)
@@ -389,33 +395,73 @@ function resolve_and_register!(specs::Vector{String}, link_inputs_path::String;
                       length(parts) == 2 ? String(parts[2]) : "", static))
     end
 
-    while !isempty(queue)
-        (spec, pkgname, prodname, static) = popfirst!(queue)
-        record = load_record(pkgname, record_cache)
-        if isempty(prodname)
-            # expand to every product of the package
-            for pn in platform_products(record)
-                push!(queue, (spec, pkgname, pn, static))
-            end
-            continue
-        end
-        (pkgname, prodname) in seen && continue
-        push!(seen, (pkgname, prodname))
-        lib, deps = resolve_library(spec, pkgname, prodname, record, host; static)
-        push!(resolved, lib)
-        # Provision closure: everything a natively-provided library depends on
-        # must itself be natively provided (its dlopen never runs). Dependency
-        # edges provision dynamically; staticness is chosen per requested node.
+    function enqueue_deps!(owner::String, pkgname::String, deps)
         for dep in deps
             depparts = split(dep, '.')
             if length(depparts) == 1
-                push!(queue, ("<dep of $pkgname.$prodname>", pkgname, String(depparts[1]), false))
+                push!(queue, ("<dep of $owner>", pkgname, String(depparts[1]), false))
             elseif length(depparts) == 2
-                push!(queue, ("<dep of $pkgname.$prodname>", String(depparts[1]), String(depparts[2]), false))
+                push!(queue, ("<dep of $owner>", String(depparts[1]), String(depparts[2]), false))
             else
                 error("--link-native: malformed dep edge `$dep` in $pkgname's record")
             end
         end
+    end
+    function drain!()
+        while !isempty(queue)
+            (spec, pkgname, prodname, static) = popfirst!(queue)
+            record = load_record(pkgname, record_cache)
+            if isempty(prodname)
+                # expand to every product of the package
+                for pn in platform_products(record)
+                    push!(queue, (spec, pkgname, pn, static))
+                end
+                continue
+            end
+            (pkgname, prodname) in seen && continue
+            push!(seen, (pkgname, prodname))
+            lib, deps = resolve_library(spec, pkgname, prodname, record, host; static)
+            push!(resolved, lib)
+            # Provision closure: everything a natively-provided library depends on
+            # must itself be natively provided (its dlopen never runs). Dependency
+            # edges provision dynamically; staticness is chosen per requested node.
+            enqueue_deps!("$pkgname.$prodname", pkgname, deps)
+        end
+    end
+    drain!()
+
+    # The Julia runtime itself (`--link-runtime=static`): the archive the
+    # build installed next to libjulia, described by the record beside it.
+    # It is linked whole, and its dependency edges are provisioned like any
+    # other library's, after the requested specs so that a `static:` request
+    # for one of them takes precedence over the default dynamic provision.
+    if static_runtime
+        libdir = dirname(Base.Libc.Libdl.dlpath("libjulia"))
+        record_path = joinpath(libdir, "libjulia-internal.toml")
+        isfile(record_path) ||
+            error("--link-runtime=static: $(record_path) not found; this Julia was built " *
+                  "without the static runtime archive (`make -C src <libdir>/libjulia-internal.a`)")
+        record = Base.parsed_toml(record_path)
+        build = select_build(record, host)
+        build === nothing &&
+            error("--link-runtime=static: the runtime record has no build for this platform")
+        entry = nothing
+        for (name, linkage, p) in build_library_entries(build)
+            (name == "libjulia-internal" && linkage == "static") && (entry = p)
+        end
+        entry === nothing &&
+            error("--link-runtime=static: the runtime record declares no static libjulia-internal")
+        path = joinpath(libdir, String(entry["path"]))
+        isfile(path) ||
+            error("--link-runtime=static: $(path) does not exist")
+        soext = Base.BinaryPlatforms.platform_dlext()
+        dlname = "libjulia-internal.$(soext).$(VERSION.major).$(VERSION.minor)"
+        push!(resolved, ResolvedLibrary("<runtime>", "julia", "libjulia-internal", "", dlname,
+                                        path, "static", "bundled",
+                                        Vector{String}(get(entry, "system_deps", String[]));
+                                        whole_archive = true))
+        enqueue_deps!("libjulia-internal", "julia", get(entry, "deps", String[]))
+        drain!()
     end
 
     # A substituted library links nothing of its own; name what satisfies
@@ -435,6 +481,7 @@ function resolve_and_register!(specs::Vector{String}, link_inputs_path::String;
     end
     append!(resolved, substituted)
     for lib in resolved
+        isempty(lib.package_uuid) && continue # the runtime archive: no identity of its own
         ccall(:jl_set_foreign_link_policy, Cvoid, (Any, Cint), library_identity(lib), true)
     end
 
@@ -456,6 +503,7 @@ function resolve_and_register!(specs::Vector{String}, link_inputs_path::String;
             if lib.replaced_with !== nothing
                 println(io, "replaced_with = \"", esc(lib.replaced_with), "\"")
             end
+            lib.whole_archive && println(io, "whole_archive = true")
             if lib.path !== nothing
                 println(io, "path = \"", esc(lib.path), "\"")
             end

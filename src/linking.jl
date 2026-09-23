@@ -96,6 +96,7 @@ function native_link_args(recipe::LinkRecipe)
     (inputs_path === nothing || !isfile(inputs_path)) &&
         error("--link-native: link-inputs manifest not found (was compile_products run?)")
     inputs = TOML.parsefile(inputs_path)
+    whole_paths = String[]
     static_paths = String[]
     dynamic_paths = String[]
     system_deps = String[]
@@ -105,7 +106,7 @@ function native_link_args(recipe::LinkRecipe)
         # under --link-native-blas).
         haskey(lib, "path") || continue
         if get(lib, "linkage", "") == "static"
-            push!(static_paths, lib["path"])
+            push!(get(lib, "whole_archive", false) ? whole_paths : static_paths, lib["path"])
             append!(system_deps, get(lib, "system_deps", String[]))
         else
             push!(dynamic_paths, lib["path"])
@@ -117,6 +118,13 @@ function native_link_args(recipe::LinkRecipe)
     # group until no new members are pulled, so mutually-referencing archive
     # sets (e.g. SuiteSparse's) need no topological order.
     args = String[]
+    # The runtime archive is linked whole: Julia code reaches most of the
+    # runtime through `ccall` by name, resolved with `dlsym` on the executable.
+    for path in whole_paths
+        push!(args, "-Wl," * Base.Linking.WHOLE_ARCHIVE)
+        push!(args, path)
+        push!(args, "-Wl," * Base.Linking.NO_WHOLE_ARCHIVE)
+    end
     if length(static_paths) > 1 && Sys.islinux()
         push!(args, "-Wl,--start-group")
         append!(args, static_paths)
@@ -125,9 +133,21 @@ function native_link_args(recipe::LinkRecipe)
         append!(args, static_paths)
     end
     append!(args, dynamic_paths)
+    # With the runtime in the executable, the C++ runtime and libatomic it
+    # needs come from the compiler's static archives (`-Bstatic` scopes to
+    # the `-l` flags between the markers), as does libgcc, so that no
+    # compiler support library ships for the runtime's sake. Everything else
+    # a record names as a system library is linked as usual.
+    static_toolchain = image_recipe.static_runtime && Sys.islinux() ?
+        ("stdc++", "atomic", "gcc_s") : ()
     for dep in unique(system_deps)
-        push!(args, "-l" * dep)
+        if dep in static_toolchain
+            append!(args, ["-Wl,-Bstatic", "-l" * dep, "-Wl,-Bdynamic"])
+        else
+            push!(args, "-l" * dep)
+        end
     end
+    image_recipe.static_runtime && Sys.islinux() && push!(args, "-static-libgcc")
     if !isempty(static_paths) && Sys.islinux()
         # Discard unreferenced sections of the statically-linked archives
         # (they are built with -ffunction-sections; the executable retains
@@ -139,51 +159,6 @@ function native_link_args(recipe::LinkRecipe)
             push!(args, "-Wl,--exclude-libs," * basename(path))
         end
         push!(args, "-Wl,--gc-sections")
-    end
-    return args
-end
-
-# Link inputs for `--link-runtime=static`: the runtime archive, linked whole
-# (Julia code reaches most of the runtime through `ccall` by name, which the
-# image resolves with `dlsym` on the executable, so nothing may be dropped),
-# followed by the libraries the archive references but does not fold in.
-# Archives shipped by the Julia installation are preferred over `-l` so the
-# executable's DT_NEEDED closure is the C library alone; the C++ runtime and
-# libatomic come from the compiler's static archives for the same reason.
-function static_runtime_link_args(recipe::LinkRecipe)
-    libdir = JuliaConfig.libDir()
-    archive = joinpath(libdir, Base.isdebugbuild() ? "libjulia-internal-debug.a" :
-                                                     "libjulia-internal.a")
-    isfile(archive) ||
-        error("--link-runtime=static: $(archive) not found; this Julia was built " *
-              "without the static runtime archive (`make -C src $(archive)`)")
-    args = String[]
-    push!(args, "-Wl," * Base.Linking.WHOLE_ARCHIVE)
-    push!(args, archive)
-    push!(args, "-Wl," * Base.Linking.NO_WHOLE_ARCHIVE)
-    # The runtime's own dependencies (src/Makefile: RT_LIBS), minus what the
-    # archive folds in. LLVM's Support library serves the runtime's target
-    # parsing and demangling even without codegen.
-    for name in ("LLVMSupport", "LLVMDemangle", "unwind", "zstd", "z")
-        a = joinpath(libdir, "lib" * name * ".a")
-        if isfile(a)
-            push!(args, a)
-        elseif Sys.islinux()
-            # No archive in the installation: take the system's static one
-            # if it has it (`-Bstatic` scopes to the `-l` between the markers).
-            append!(args, ["-Wl,-Bstatic", "-l" * name, "-Wl,-Bdynamic"])
-        else
-            push!(args, "-l" * name)
-        end
-    end
-    if Sys.islinux()
-        append!(args, ["-Wl,-Bstatic", "-lstdc++", "-latomic", "-Wl,-Bdynamic"])
-        # The compiler's unwinder support library, statically too, so that no
-        # libgcc_s ships for the runtime's sake.
-        push!(args, "-static-libgcc")
-        append!(args, ["-lrt", "-ldl", "-lpthread", "-lm"])
-    elseif Sys.isapple()
-        append!(args, ["-lc++", "-framework", "CoreFoundation"])
     end
     return args
 end
@@ -224,7 +199,7 @@ function link_products(recipe::LinkRecipe)
     if image_recipe.static_runtime
         image_recipe.output_type == "--output-exe" ||
             error("--link-runtime=static is only supported for --output-exe")
-        julia_libs = static_runtime_link_args(recipe)
+        julia_libs = String[] # the runtime archive is a link input (see native_link_args)
     else
         julia_libs = Base.shell_split(Base.isdebugbuild() ? "-ljulia-debug -ljulia-internal-debug" : "-ljulia -ljulia-internal")
     end
@@ -245,7 +220,8 @@ function link_products(recipe::LinkRecipe)
         # Link in the whole archive and user-provided objects, then undo WHOLE_ARCHIVE
         cmd2 = `$cmd2 -Wl,$(Base.Linking.WHOLE_ARCHIVE) $(image_recipe.img_path) $(image_recipe.extra_objects) -Wl,$(Base.Linking.NO_WHOLE_ARCHIVE) $(julia_libs)`
         # Libraries bound via direct external symbols rather than lazy ccall stubs
-        if !isempty(image_recipe.link_native_libs) || image_recipe.link_native_blas !== nothing
+        if !isempty(image_recipe.link_native_libs) || image_recipe.link_native_blas !== nothing ||
+                image_recipe.static_runtime
             cmd2 = `$cmd2 $(native_link_args(recipe))`
         end
         if Sys.ARCH === :i686

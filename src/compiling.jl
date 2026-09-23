@@ -203,7 +203,7 @@ function compile_products(recipe::ImageRecipe)
     if recipe.export_abi !== nothing
         cmd = `$cmd --export-abi $(recipe.export_abi)`
     end
-    if !isempty(recipe.link_native_libs) || recipe.link_native_blas !== nothing
+    if !isempty(recipe.link_native_libs) || recipe.link_native_blas !== nothing || recipe.static_runtime
         # The buildscript resolves these package specs through their
         # JLL.toml records and registers the resolved identities with the
         # runtime's foreign link policy before any user code (and therefore
@@ -219,10 +219,13 @@ function compile_products(recipe::ImageRecipe)
         if recipe.link_native_blas !== nothing
             cmd = `$cmd --link-native-blas $(recipe.link_native_blas)`
         end
+        if recipe.static_runtime
+            cmd = `$cmd --link-runtime static`
+        end
         cmd = `$cmd --link-inputs $(recipe.link_inputs_path)`
     end
     if (is_trim_enabled(recipe) || !isempty(recipe.link_native_libs) ||
-            recipe.link_native_blas !== nothing) && recipe.export_used_symbols === nothing
+            recipe.link_native_blas !== nothing || recipe.static_runtime) && recipe.export_used_symbols === nothing
         # The driver needs the used-symbols manifest to verify native
         # linkage; under --trim it is additionally the complete ccall
         # surface of the image, used to prune bundled libraries the image
@@ -301,7 +304,7 @@ function compile_products(recipe::ImageRecipe)
     # Verify the native-link policy took effect: every library requested via
     # --link-native must have all of its ccall/cglobal sites bound natively.
     # A site left at lazy lookup here would silently fall back at runtime.
-    if !isempty(recipe.link_native_libs) || recipe.link_native_blas !== nothing
+    if !isempty(recipe.link_native_libs) || recipe.link_native_blas !== nothing || recipe.static_runtime
         _verify_native_linkage(recipe)
     end
     # Compile the LBT control-API shim for --link-native-blas, configured
