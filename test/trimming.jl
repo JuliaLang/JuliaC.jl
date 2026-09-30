@@ -13,6 +13,8 @@ const TRIM_PROJ = abspath(joinpath(@__DIR__, "TrimmabilityProject"))
         output_type = "--output-exe",
         project = TEST_PROJ,
         trim_mode = "safe",
+        # One CPU target, so this only measures trimming
+        cpu_target = "native",
         quiet = true,
     )
     JuliaC.compile_products(img)
@@ -24,8 +26,8 @@ const TRIM_PROJ = abspath(joinpath(@__DIR__, "TrimmabilityProject"))
     actual_exe = Sys.iswindows() ? joinpath(outdir, "bin", basename(exeout) * ".exe") : joinpath(outdir, "bin", basename(exeout))
     @test isfile(actual_exe)
 
-    # Test that the executable size stays reasonable (< 3.5MB for the executable itself)
-    @test filesize(actual_exe) < 3_500_000
+    # Test that the executable size stays reasonable (< 2.5MB for the executable itself)
+    @test filesize(actual_exe) < 2_500_000
 end
 
 @testset "Trimming: trimmability.jl (various constructs)" begin
