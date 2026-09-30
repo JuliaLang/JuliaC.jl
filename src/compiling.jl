@@ -82,9 +82,16 @@ function run_with_suppressed_output(cmd::Base.AbstractCmd; quiet::Bool)
     end
 end
 
-# One flag per entry, passed verbatim: splitting on whitespace would corrupt
-# flags carrying a path with spaces.
-normalize_user_flags(flags) = String[String(f) for f in flags]
+"""
+    c_shim_compile_cmd(recipe::ImageRecipe, csrc, obj) -> Cmd
+
+Command compiling the C shim `csrc` into `obj`: Julia's cflags followed by
+`recipe.cflags`, each entry passed to the compiler as one argument.
+"""
+function c_shim_compile_cmd(recipe::ImageRecipe, csrc::AbstractString, obj::AbstractString)
+    cflags = [JuliaConfig.cflags(; framework=false); recipe.cflags]
+    return `$(get_compiler_cmd()) $cflags -c $csrc -o $obj`
+end
 
 function compile_products(recipe::ImageRecipe)
     # Only strip IR / metadata if not `--trim=no`
@@ -236,27 +243,16 @@ function compile_products(recipe::ImageRecipe)
         println("Image size: ", Base.format_bytes(img_sz))
     end
     # If C shim sources are provided, compile them to objects for linking stage
-    if !isempty(recipe.c_sources)
-        compiler_cmd = JuliaC.get_compiler_cmd()
-        # Ensure include flags are passed as separate tokens
-        default_cflags = Base.shell_split(JuliaC.JuliaConfig.cflags(; framework=false))
-        cflags = vcat(default_cflags, normalize_user_flags(recipe.cflags))
-        for csrc in recipe.c_sources
-            obj = replace(csrc, ".c" => ".o")
-            try
-                # Build command incrementally to avoid argument concatenation issues
-                cmdc = compiler_cmd
-                for cf in cflags
-                    cmdc = `$cmdc $cf`
-                end
-                cmdc = `$cmdc -c $(csrc) -o $(obj)`
-                recipe.verbose && println("Running: $cmdc")
-                run(cmdc)
-                push!(recipe.extra_objects, obj)
-            catch e
-                error("C shim compilation failed: ", e)
-            end
+    for csrc in recipe.c_sources
+        obj = replace(csrc, ".c" => ".o")
+        cmdc = c_shim_compile_cmd(recipe, csrc, obj)
+        recipe.verbose && println("Running: $cmdc")
+        try
+            run(cmdc)
+        catch e
+            error("C shim compilation failed: ", e)
         end
+        push!(recipe.extra_objects, obj)
     end
     # Always compile the jl_options shim so that jl_parse_opts runs
     # consistently, even when no explicit options are provided.
@@ -300,7 +296,7 @@ Returns the path to the compiled object file.
 """
 function _compile_jl_options_shim(jl_options::Dict{String,String}; verbose::Bool=false)
     compiler_cmd = JuliaC.get_compiler_cmd()
-    default_cflags = Base.shell_split(JuliaC.JuliaConfig.cflags(; framework=false))
+    default_cflags = JuliaC.JuliaConfig.cflags(; framework=false)
     tmpdir = mktempdir()
     shim_src = joinpath(JuliaC.SCRIPTS_DIR, "juliac-jl-options-shim.c")
     body_hdr = joinpath(tmpdir, "juliac-jl-options-body.h")

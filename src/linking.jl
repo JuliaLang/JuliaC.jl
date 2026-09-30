@@ -4,57 +4,43 @@
 const RPATH_JULIA = "@julia"
 const RPATH_BUNDLE = "@bundle"
 
-# `base_token` below already opens the quote (for the literal `$ORIGIN`)
-escape_rpath_body(path::AbstractString) = replace(path, "'" => "'\\''")
-
 function get_rpath(recipe::LinkRecipe)
     rpath = recipe.rpath
 
     if Sys.iswindows() && (rpath == RPATH_JULIA || rpath == RPATH_BUNDLE)
-        return "" # only (loader) default rpath is supported on Windows
+        return String[] # only (loader) default rpath is supported on Windows
     end
 
     if rpath == RPATH_JULIA
         # Handle @julia magic string - absolute paths to Julia installation
-        libdir = JuliaConfig.shell_escape(JuliaConfig.libDir())
-        private_libdir = JuliaConfig.shell_escape(JuliaConfig.private_libDir())
-        return "-Wl,-rpath,$(libdir) -Wl,-rpath,$(private_libdir)"
+        return ["-Wl,-rpath," * JuliaConfig.libDir(),
+                "-Wl,-rpath," * JuliaConfig.private_libDir()]
     elseif rpath == RPATH_BUNDLE
         # Handle @bundle magic string - standard bundle layout
         rpath = joinpath("..", "lib")
     end
 
     if Sys.isapple()
-        base_token = "-Wl,-rpath,'@loader_path/"
+        base = "@loader_path/"
     elseif Sys.islinux()
-        base_token = "-Wl,-rpath,'\$ORIGIN/"
+        base = "\$ORIGIN/"
     else
         @warn "get_rpath not implemented for this platform"
-        return ""
+        return String[]
     end
 
     # Emit rpaths for both base path and julia subdirectory
-    priv_path = joinpath(rpath, "julia")
-    base_path = rpath
-    # Escape: `link_products` splits this flag string again
-    flag1 = base_token * escape_rpath_body(base_path) * "'"
-    flag2 = base_token * escape_rpath_body(priv_path) * "'"
-    return string(flag1, " ", flag2)
-end
-
-# A `JULIA_CC` naming an existing file is used verbatim, so paths with spaces
-# (or Windows backslashes) survive; anything else is parsed as a command line,
-# e.g. `JULIA_CC="ccache gcc"`.
-function parse_compiler_env(cc::AbstractString)
-    isfile(cc) && return Cmd(String[String(cc)])
-    return Cmd(Base.shell_split(cc))
+    return ["-Wl,-rpath," * base * rpath,
+            "-Wl,-rpath," * base * joinpath(rpath, "julia")]
 end
 
 function get_compiler_cmd(; cplusplus::Bool=false)
+    # Parsed like `CC`: quote a compiler path containing spaces or backslashes,
+    # e.g. `JULIA_CC="'/path/to some/cc' --flag"`.
     cc = get(ENV, "JULIA_CC", nothing)
     path = nothing
     if cc !== nothing
-        compiler_cmd = parse_compiler_env(cc)
+        compiler_cmd = Cmd(Base.shell_split(cc))
         path = nothing
     else
         @static if Sys.iswindows()
@@ -128,10 +114,10 @@ function link_products(recipe::LinkRecipe)
             end
         end
     end
-    rpath_str = Base.shell_split(get_rpath(recipe))
-    julia_libs = Base.shell_split(Base.isdebugbuild() ? "-ljulia-debug -ljulia-internal-debug" : "-ljulia -ljulia-internal")
+    rpath_flags = get_rpath(recipe)
+    julia_libs = Base.isdebugbuild() ? ["-ljulia-debug", "-ljulia-internal-debug"] : ["-ljulia", "-ljulia-internal"]
     compiler_cmd = get_compiler_cmd()
-    allflags = Base.shell_split(JuliaConfig.allflags(; framework=false, rpath=false))
+    allflags = JuliaConfig.allflags(; framework=false, rpath=false)
     try
         mkpath(dirname(recipe.outname))
         is_shared_output = image_recipe.output_type != "--output-exe"
@@ -140,7 +126,7 @@ function link_products(recipe::LinkRecipe)
         for f in recipe.ld_flags
             cmd2 = `$cmd2 $f`
         end
-        cmd2 = `$cmd2 $(allflags) $(rpath_str) -o $(recipe.outname)`
+        cmd2 = `$cmd2 $(allflags) $(rpath_flags) -o $(recipe.outname)`
         if is_shared_output
             cmd2 = `$cmd2 -shared`
         end

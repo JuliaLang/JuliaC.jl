@@ -1,78 +1,51 @@
-# Regression tests for paths containing spaces (and other characters that are
-# significant to `Base.shell_split`, used to parse flag strings back into args).
+# Regression tests for paths containing spaces.
 
 @testset "Paths with spaces" begin
 
-@testset "shell_escape round-trips awkward paths" begin
-    paths = [
-        "/plain/path",
-        "/home/john doe/julia/lib",
-        "/home/it's mine/julia/lib",
-        raw"C:\Program Files\Julia-1.12\include\julia",
-    ]
-    for p in paths
-        @test Base.shell_split(JuliaC.JuliaConfig.shell_escape(p)) == [p]
-    end
+@testset "julia-config flags keep directories in one argument" begin
+    @test "-I" * JuliaC.JuliaConfig.includeDir() in JuliaC.JuliaConfig.cflags(; framework=false)
+    @test "-L" * JuliaC.JuliaConfig.libDir() in
+        JuliaC.JuliaConfig.allflags(; framework=false, rpath=false)
 end
 
-@testset "julia-config flags survive the shell_split round-trip" begin
-    # Separate tokens, with the (possibly space-containing) directories intact.
-    for flags in (JuliaC.JuliaConfig.cflags(; framework=false),
-                  JuliaC.JuliaConfig.allflags(; framework=false, rpath=false))
-        tokens = Base.shell_split(flags)
-        @test !isempty(tokens)
-        for t in tokens
-            @test startswith(t, "-")
-        end
-        incdir = JuliaC.JuliaConfig.includeDir()
-        @test "-I" * incdir in tokens
-    end
-end
-
-@testset "rpath flags keep space-containing paths in one token" begin
+@testset "rpath flags" begin
     img = JuliaC.ImageRecipe(output_type = "--output-exe")
+    rpath_flags(rpath) =
+        JuliaC.get_rpath(JuliaC.LinkRecipe(image_recipe = img, outname = "app", rpath = rpath))
 
-    if !Sys.iswindows()
-        link = JuliaC.LinkRecipe(image_recipe = img, outname = "app",
-                                 rpath = JuliaC.RPATH_JULIA)
-        @test Base.shell_split(JuliaC.get_rpath(link)) ==
+    if Sys.iswindows()
+        @test isempty(rpath_flags(JuliaC.RPATH_JULIA))
+    else
+        @test rpath_flags(JuliaC.RPATH_JULIA) ==
             ["-Wl,-rpath," * JuliaC.JuliaConfig.libDir(),
              "-Wl,-rpath," * JuliaC.JuliaConfig.private_libDir()]
     end
-
-    if Sys.isunix()
-        # A custom rpath with a space must stay a single linker argument.
-        link = JuliaC.LinkRecipe(image_recipe = img, outname = "app",
-                                 rpath = joinpath("..", "my libs"))
-        tokens = Base.shell_split(JuliaC.get_rpath(link))
-        @test length(tokens) == 2
-        @test endswith(tokens[1], joinpath("..", "my libs"))
-        @test endswith(tokens[2], joinpath("..", "my libs", "julia"))
+    if Sys.islinux() || Sys.isapple()
+        base = Sys.isapple() ? "@loader_path" : "\$ORIGIN"
+        @test rpath_flags(joinpath("..", "my libs")) ==
+            ["-Wl,-rpath,$base/../my libs", "-Wl,-rpath,$base/../my libs/julia"]
     end
 end
 
-@testset "JULIA_CC pointing at a path with spaces" begin
-    mktempdir() do dir
-        ccdir = joinpath(dir, "my compiler")
-        mkpath(ccdir)
-        cc = joinpath(ccdir, Sys.iswindows() ? "cc.bat" : "cc")
-        touch(cc)
-        @test JuliaC.parse_compiler_env(cc).exec == [cc]
-        withenv("JULIA_CC" => cc) do
-            @test JuliaC.get_compiler_cmd().exec == [cc]
-        end
+@testset "JULIA_CC with a quoted path containing spaces" begin
+    # Parsed like `CC`: the path must be quoted.
+    cc = joinpath(tempdir(), "my compiler", "cc")
+    withenv("JULIA_CC" => Base.shell_escape(cc) * " --flag") do
+        @test JuliaC.get_compiler_cmd().exec == [cc, "--flag"]
     end
-    # Values that are not a path are still parsed as a command line.
-    @test JuliaC.parse_compiler_env("ccache gcc").exec == ["ccache", "gcc"]
 end
 
-@testset "user compiler flags are passed through verbatim" begin
-    # The reported failure: with `-I` and the directory as two entries, the
-    # directory used to be split on its spaces into several arguments.
-    flags = ["-I", raw"C:\Program Files\Julia-1.12\include\julia",
-             "-I/my dir/include", "-isystem/my dir/include",
-             "-DGREETING=\"hello world\""]
-    @test JuliaC.normalize_user_flags(flags) == flags
+@testset "C shim compile command keeps user flags intact" begin
+    # The reported failure: with `cflags = ["-I", dir]`, `dir` used to be split
+    # on its spaces into several arguments.
+    incdir = joinpath(tempdir(), "my includes")
+    img = JuliaC.ImageRecipe(cflags = ["-I", incdir, "-DGREETING=\"hello world\""])
+    args = JuliaC.c_shim_compile_cmd(img, "shim.c", "shim.o").exec
+    i = findfirst(==("-I"), args)
+    @test i !== nothing && args[i + 1] == incdir
+    @test "-DGREETING=\"hello world\"" in args
+    @test "-I" * JuliaC.JuliaConfig.includeDir() in args
+    @test args[end-3:end] == ["-c", "shim.c", "-o", "shim.o"]
 end
 
 @testset "C shim with an include directory containing spaces" begin
@@ -103,13 +76,23 @@ end
 end
 
 @testset "otool -L install names with spaces" begin
-    out = """
-    /Users/john doe/build/lib/libfoo.dylib:
+    thin = """
+    /Users/john doe/lib/libfoo.dylib:
     \t@rpath/my libs/libjulia.1.12.dylib (compatibility version 1.0.0, current version 1.12.0)
     \t/usr/lib/libSystem.B.dylib (compatibility version 1.0.0, current version 1345.0.0)
     """
-    @test JuliaC.parse_otool_deps(out) ==
+    @test JuliaC.parse_otool_deps(thin) ==
         ["@rpath/my libs/libjulia.1.12.dylib", "/usr/lib/libSystem.B.dylib"]
+
+    # Fat binaries print a header per architecture.
+    fat = """
+    /Users/john doe/lib/libfoo.dylib (architecture x86_64):
+    \t@rpath/my libs (old)/libjulia.1.12.dylib (compatibility version 1.0.0, current version 1.12.0)
+    /Users/john doe/lib/libfoo.dylib (architecture arm64):
+    \t@rpath/my libs (old)/libjulia.1.12.dylib (compatibility version 1.0.0, current version 1.12.0)
+    """
+    @test JuliaC.parse_otool_deps(fat) ==
+        fill("@rpath/my libs (old)/libjulia.1.12.dylib", 2)
 end
 
 @testset "CLI build from and into directories with spaces" begin
