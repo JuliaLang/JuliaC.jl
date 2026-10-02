@@ -11,11 +11,6 @@ const options = [
     "--framework"
 ];
 
-function shell_escape(str)
-    str = replace(str, "'" => "'\''")
-    return "'$str'"
-end
-
 function libDir()
     return if Base.isdebugbuild()
         if Base.DARWIN_FRAMEWORK
@@ -45,24 +40,23 @@ function includeDir()
     return abspath(Sys.BINDIR, Base.INCLUDEDIR, "julia")
 end
 
+# The flag functions below return one compiler argument per element, so paths
+# containing spaces need no quoting. `main` shell-escapes them for printing.
+
 function march_flags()
     if Sys.ARCH === :i686
-        return "-m32 -march=pentium4"
+        return ["-m32", "-march=pentium4"]
     end
-    return ""
+    return String[]
 end
 
 function ldflags(; framework::Bool=false)
-    framework && return "-F$(shell_escape(frameworkDir()))"
-    fl = "-L$(shell_escape(libDir()))"
-    march = march_flags()
-    if !isempty(march)
-        fl = march * " " * fl
-    end
+    framework && return ["-F" * frameworkDir()]
+    fl = [march_flags(); "-L" * libDir()]
     if Sys.iswindows()
-        fl = fl * " -Wl,--stack,8388608"
+        push!(fl, "-Wl,--stack,8388608")
     elseif !Sys.isapple()
-        fl = fl * " -Wl,--export-dynamic"
+        push!(fl, "-Wl,--export-dynamic")
     end
     return fl
 end
@@ -73,14 +67,14 @@ function ldrpath()
     else
         "julia"
     end
-    return "-Wl,-rpath,$(shell_escape(private_libDir())) -Wl,-rpath,$(shell_escape(libDir())) -l$libname"
+    return ["-Wl,-rpath," * private_libDir(), "-Wl,-rpath," * libDir(), "-l" * libname]
 end
 
 function ldlibs(; framework::Bool=false, rpath::Bool=true)
     # Return "Julia" for the framework even if this is a debug build.
     # If the user wants the debug framework, DYLD_IMAGE_SUFFIX=_debug
     # should be used (refer to man 1 dyld).
-    framework && return "-framework $(Base.DARWIN_FRAMEWORK_NAME)"
+    framework && return ["-framework", Base.DARWIN_FRAMEWORK_NAME]
     libname = if Base.isdebugbuild()
         "julia-debug"
     else
@@ -88,43 +82,36 @@ function ldlibs(; framework::Bool=false, rpath::Bool=true)
     end
     if Sys.isunix()
         if rpath
-            return "-L$(shell_escape(private_libDir())) $(ldrpath())"
+            return ["-L" * private_libDir(); ldrpath()]
         else
-            return "-L$(shell_escape(private_libDir()))"
+            return ["-L" * private_libDir()]
         end
     else
-        return "-l$libname -lopenlibm"
+        return ["-l" * libname, "-lopenlibm"]
     end
 end
 
 function cflags(; framework::Bool=false)
-    flags = IOBuffer()
-    print(flags, "-std=gnu11")
-    march = march_flags()
-    if !isempty(march)
-        print(flags, " ", march)
-    end
+    flags = ["-std=gnu11"; march_flags()]
     if Sys.ARCH === :i686
-        print(flags, " -Wno-psabi")
+        push!(flags, "-Wno-psabi")
     end
     if framework
-        include = shell_escape(frameworkDir())
-        print(flags, " -F", include)
+        push!(flags, "-F" * frameworkDir())
     else
-        include = shell_escape(includeDir())
-        print(flags, " -I", include)
+        push!(flags, "-I" * includeDir())
     end
     if Sys.isunix()
-        print(flags, " -fPIC")
+        push!(flags, "-fPIC")
     end
     if Sys.isapple()
-        print(flags, " -Wno-nullability-completeness")
+        push!(flags, "-Wno-nullability-completeness")
     end
-    return String(take!(flags))
+    return flags
 end
 
 function allflags(; framework::Bool=false, rpath::Bool=true)
-    return "$(cflags(; framework)) $(ldflags(; framework)) $(ldlibs(; framework, rpath))"
+    return [cflags(; framework); ldflags(; framework); ldlibs(; framework, rpath)]
 end
 
 function check_args(args)
@@ -152,13 +139,13 @@ function (@main)(args)
     framework = check_framework_flag(args)
     for args in args
         if args == "--ldflags"
-            println(ldflags(; framework))
+            println(Base.shell_escape(ldflags(; framework)...))
         elseif args == "--cflags"
-            println(cflags(; framework))
+            println(Base.shell_escape(cflags(; framework)...))
         elseif args == "--ldlibs"
-            println(ldlibs(; framework))
+            println(Base.shell_escape(ldlibs(; framework)...))
         elseif args == "--allflags"
-            println(allflags(; framework))
+            println(Base.shell_escape(allflags(; framework)...))
         end
     end
 end

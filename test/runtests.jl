@@ -13,5 +13,6 @@ include("utils.jl")
 
 include("programatic.jl")
 include("cli.jl")
+include("spaces.jl")
 include("trimming.jl")
 include("quiet.jl")

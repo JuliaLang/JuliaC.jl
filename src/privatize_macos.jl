@@ -18,6 +18,23 @@ function privatize_libjulia_macos!(recipe::BundleRecipe, salt::String)
     end
 end
 
+# `otool -L` prints a header per architecture (`<bin>:` or, for fat binaries,
+# `<bin> (architecture arm64):`), then one indented `<install name> (...)` line
+# per dependency. Install names can contain spaces, so only strip the last
+# parenthesized group.
+# TODO: read the load commands with a proper tool (ObjectFile.jl / LIEF) instead.
+function parse_otool_deps(out::AbstractString)
+    deps = String[]
+    for line in eachline(IOBuffer(out))
+        (isempty(line) || !isspace(first(line))) && continue  # skip headers
+        line = strip(line)
+        i = endswith(line, ')') ? findlast('(', line) : nothing
+        dep = i === nothing ? line : rstrip(line[1:prevind(line, i)])
+        isempty(dep) || push!(deps, String(dep))
+    end
+    return deps
+end
+
 # macOS-specific dependency extraction
 function get_dependencies_macos(bin::String)
     out = try
@@ -25,17 +42,7 @@ function get_dependencies_macos(bin::String)
     catch
         return String[]
     end
-    lines = split(out, '\n')
-    deps = String[]
-    for i in 2:length(lines)
-        line = strip(lines[i])
-        isempty(line) && continue
-        sp = findfirst(' ', line)
-        if sp !== nothing
-            push!(deps, strip(line[1:prevind(line, first(sp))]))
-        end
-    end
-    return deps
+    return parse_otool_deps(out)
 end
 
 function install_name_id!(libpath::String, new_id::String)
