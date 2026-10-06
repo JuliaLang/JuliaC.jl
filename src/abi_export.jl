@@ -6,6 +6,10 @@ const C_friendly_types = Base.IdSet{Any}([    # a few of these are redundant to 
 ])
 
 function recursively_add_types!(types::Base.IdSet{DataType}, @nospecialize(T::DataType))
+    if T === Nothing
+        # Returns and pointer pointees are handled without a type node.
+        error("invalid type for juliac: Nothing (Cvoid) is representable in C only as a return type or as the pointee of Ptr{Cvoid}")
+    end
     T in types && return types
     while T.name === Ptr.body.name
         push!(types, T)
@@ -17,11 +21,15 @@ function recursively_add_types!(types::Base.IdSet{DataType}, @nospecialize(T::Da
         error("invalid type for juliac: ", T) # exclude internals (they may change)
     end
     push!(types, T)
-    for list in (T.parameters, fieldtypes(T))
-        for S in list
-            S isa DataType || continue   # skip non-type parameters (Int, TypeVar, Vararg, …)
-            recursively_add_types!(types, S)
-        end
+    for S in T.parameters
+        S isa DataType || continue   # skip non-type parameters (Int, TypeVar, Vararg, …)
+        # Parameters do not need a node unless stored in a field.
+        S === Nothing && continue
+        recursively_add_types!(types, S)
+    end
+    for S in fieldtypes(T)
+        S isa DataType || continue
+        recursively_add_types!(types, S)
     end
     return types
 end
