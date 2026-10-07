@@ -4,7 +4,6 @@ using Pkg
 using TOML
 using PackageCompiler
 using LazyArtifacts
-using Libdl
 using RelocatableFolders
 using Preferences
 

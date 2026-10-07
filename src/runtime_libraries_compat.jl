@@ -39,12 +39,14 @@ function library_files_compat(names)
     for dir in unique!(String[julia_private_shlibdir(), julia_shlibdir()])
         isdir(dir) && push!(dirs, dir => readdir(dir; sort=true))
     end
+    # the one-argument `parse_dl_name_version` is new in Julia 1.13
+    os = Base.BinaryPlatforms.os(Base.BinaryPlatforms.HostPlatform())
     paths = String[]
     for name in names
         for (dir, files) in dirs
             found = false
             for file in files
-                _is_library_file_compat(name, file) || continue
+                _is_library_file_compat(name, file, os) || continue
                 push!(paths, joinpath(dir, file))
                 found = true
             end
@@ -60,10 +62,10 @@ library_files_compat(name::AbstractString) = library_files_compat((name,))
 # `Base.BinaryPlatforms.parse_dl_name_version` exists here, but before Julia 1.14 it rejects
 # a soversion carrying a tag, which is how Julia spells its own LLVM (`libLLVM.so.20.1jl`),
 # so fall back to asking it about the name with such a tag removed.
-function _is_library_file_compat(name::AbstractString, file::AbstractString)
+function _is_library_file_compat(name::AbstractString, file::AbstractString, os::AbstractString)
     for candidate in (file, _strip_soversion_tag(file))
         parsed = try
-            first(Base.BinaryPlatforms.parse_dl_name_version(candidate))
+            first(Base.BinaryPlatforms.parse_dl_name_version(candidate, os))
         catch ex
             ex isa ArgumentError || rethrow()
             continue # not the name of a shared library file

@@ -2,7 +2,8 @@
 # `Base.Linking.runtime_libraries` (Julia 1.14 and later), so that the list keeps matching
 # the runtime as its dependencies change. Julia versions that do not declare it are served by
 # `runtime_libraries_compat.jl`, which is where everything that duplicates Julia's own
-# functionality lives.
+# functionality lives. These functions are internal to Base, so test for them rather than for
+# a Julia version.
 
 const _JULIA_DECLARES_RUNTIME_LIBRARIES = isdefined(Base.Linking, :runtime_libraries)
 

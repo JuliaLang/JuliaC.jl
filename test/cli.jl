@@ -53,7 +53,7 @@ end
             occursin(".so", file) && !islink(path) && is_elf(path) && push!(binaries, path)
         end
         for binary in binaries
-            needed = readchomp(`$(Patchelf_jll.patchelf()) --print-needed $binary`)
+            needed = readchomp(`$(LIEF_Patchelf_jll.lief_patchelf()) --print-needed $binary`)
             for dep in split(needed, '\n'; keepempty=false)
                 dep in installed || continue # provided by the system, not by Julia
                 @test dep in bundled
