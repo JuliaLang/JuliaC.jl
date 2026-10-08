@@ -13,6 +13,8 @@ const TRIM_PROJ = abspath(joinpath(@__DIR__, "TrimmabilityProject"))
         output_type = "--output-exe",
         project = TEST_PROJ,
         trim_mode = "safe",
+        # One CPU target, so this only measures trimming
+        cpu_target = "native",
         quiet = true,
     )
     JuliaC.compile_products(img)

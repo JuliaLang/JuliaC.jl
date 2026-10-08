@@ -93,6 +93,13 @@ function c_shim_compile_cmd(recipe::ImageRecipe, csrc::AbstractString, obj::Abst
     return `$(get_compiler_cmd()) $cflags -c $csrc -o $obj`
 end
 
+# Build for the same CPUs as Julia's own system image (Julia 1.13+ only)
+function default_cpu_target()
+    isdefined(Sys, :sysimage_target) || return nothing
+    # Ask a new process: loading packages overwrites this value in the current one
+    return readchomp(`$(Base.julia_cmd()) --startup-file=no --history-file=no -e "print(Sys.sysimage_target())"`)
+end
+
 function compile_products(recipe::ImageRecipe)
     # Only strip IR / metadata if not `--trim=no`
     strip_args = String[]
@@ -122,7 +129,7 @@ function compile_products(recipe::ImageRecipe)
         get!(recipe.jl_options, "threads", "1")
     end
     if recipe.cpu_target === nothing
-        recipe.cpu_target = get(ENV,"JULIA_CPU_TARGET", nothing)
+        recipe.cpu_target = get(default_cpu_target, ENV, "JULIA_CPU_TARGET")
     end
     julia_cmd = `$(Base.julia_cmd(;cpu_target=recipe.cpu_target)) --startup-file=no --history-file=no`
     if recipe.cpu_target !== nothing
@@ -181,7 +188,9 @@ function compile_products(recipe::ImageRecipe)
         )
     end
 
-    inst_cmd = addenv(`$(Base.julia_cmd(cpu_target=precompile_cpu_target)) --project=$project_arg -e "using Pkg; Pkg.instantiate(); Pkg.precompile()"`, env_overrides...)
+    # Package precompilation reads JULIA_CPU_TARGET, not `-C`
+    inst_cmd = addenv(`$(Base.julia_cmd(cpu_target=precompile_cpu_target)) --project=$project_arg -e "using Pkg; Pkg.instantiate(); Pkg.precompile()"`,
+                      env_overrides..., "JULIA_CPU_TARGET" => precompile_cpu_target)
     recipe.verbose && println("Running: $inst_cmd")
     precompile_time = time_ns()
     if !run_with_suppressed_output(inst_cmd; quiet=recipe.quiet)
