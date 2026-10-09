@@ -26,8 +26,7 @@ end
     output = read(`$actual_exe`, String)
     @test occursin("Fast compilation test!", output)
 
-    # the bundle holds every library the runtime needs, and, being trimmed, nothing that is
-    # only needed to generate code at run time
+    # every runtime library, and no codegen ones since the app is trimmed
     bundled = Set{String}()
     for (root, _, files) in walkdir(outdir), file in files
         push!(bundled, file)
@@ -37,15 +36,14 @@ end
     end
     @test !any(f -> startswith(f, "libLLVM") || startswith(f, "libjulia-codegen"), bundled)
 
-    # Every dependency of the bundle that the Julia installation ships has to be in the
-    # bundle as well. A missing one is easy to miss, because the loader then picks up the
-    # system copy on machines that happen to have one, and only fails elsewhere.
+    # Every dependency Julia ships must be bundled. A missing one goes unnoticed on machines
+    # with a system copy.
     if Sys.islinux()
         installed = Set{String}()
         for dir in (JuliaC.julia_private_shlibdir(), JuliaC.julia_shlibdir())
             isdir(dir) && union!(installed, readdir(dir))
         end
-        # `lib*.so` is not always an ELF file: `libgcc_s.so` is a GNU ld script
+        # `libgcc_s.so` is a linker script, not ELF
         is_elf(path) = open(io -> read(io, 4) == b"\x7fELF", path, "r")
         binaries = String[actual_exe]
         for (root, _, files) in walkdir(joinpath(outdir, "lib")), file in files
@@ -55,7 +53,7 @@ end
         for binary in binaries
             needed = readchomp(`$(LIEF_Patchelf_jll.lief_patchelf()) --print-needed $binary`)
             for dep in split(needed, '\n'; keepempty=false)
-                dep in installed || continue # provided by the system, not by Julia
+                dep in installed || continue # from the system
                 @test dep in bundled
             end
         end

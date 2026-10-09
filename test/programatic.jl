@@ -52,8 +52,7 @@
             salt = JuliaC.salt_for(bun)
             JuliaC.bundle_products(bun)
 
-            # a Julia installation keeps its private libraries in `lib/julia`, a Julia built
-            # from source keeps them in `lib`, and the bundle mirrors that
+            # private libraries are in `lib/julia`, or `lib` for a source build
             lib_dir = joinpath(outdir, "lib")
             @test isdir(lib_dir)
             dylibs = [joinpath(root, f) for (root, _, files) in walkdir(lib_dir) for f in files
