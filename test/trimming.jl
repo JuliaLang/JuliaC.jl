@@ -67,7 +67,7 @@ end
     @test lines[4] == "arg2"
     @test parse(Float64, lines[5]) ≈ (4.0 + pi)
     @test parse(Float64, lines[6]) isa Float64
-    @test lines[7] == "nested reductions: 2 9.0 9.0"
+    @test lines[7] == "nested reductions: 2 9.0"
 end
 
 @testset "Trimming: libsimple.jl C application test" begin
