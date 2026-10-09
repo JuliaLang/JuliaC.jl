@@ -52,9 +52,11 @@
             salt = JuliaC.salt_for(bun)
             JuliaC.bundle_products(bun)
 
-            julia_dir = joinpath(outdir, "lib", "julia")
-            @test isdir(julia_dir)
-            dylibs = filter(f -> endswith(f, ".dylib") || endswith(f, ".so"), readdir(julia_dir; join=true))
+            # private libraries are in `lib/julia`, or `lib` for a source build
+            lib_dir = joinpath(outdir, "lib")
+            @test isdir(lib_dir)
+            dylibs = [joinpath(root, f) for (root, _, files) in walkdir(lib_dir) for f in files
+                                        if endswith(f, ".dylib") || endswith(f, ".so")]
             salted = filter(f -> occursin("_libjulia", basename(f)), dylibs)
             @test !isempty(salted)
             # The salt is stable across builds.

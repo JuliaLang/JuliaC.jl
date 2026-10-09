@@ -68,6 +68,7 @@ end
 
 include("compiling.jl")
 include("linking.jl")
+include("runtime_libraries.jl")
 include("bundling.jl")
 include("patchversion.jl")
 include("privatize_common.jl")
