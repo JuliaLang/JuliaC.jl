@@ -23,7 +23,8 @@ function bundle_products(recipe::BundleRecipe)
     ctx2 = PackageCompiler.create_pkg_context(image_recipe.instantiated_project)
     stdlibs = unique(vcat(PackageCompiler.gather_stdlibs_project(ctx2),
                           intersect(PackageCompiler._STDLIBS, map(x->x.name, Base._sysimage_modules))))
-    libs_info = bundle_libraries(recipe, stdlibs)
+    libs_info = _JULIA_DECLARES_RUNTIME_LIBRARIES ? bundle_libraries(recipe, stdlibs) :
+                PackageCompiler.bundle_julia_libraries(recipe.output_dir, stdlibs; quiet)
     artifacts_info = PackageCompiler.bundle_artifacts(ctx2, recipe.output_dir;
             include_lazy_artifacts=recipe.bundle_lazy_artifacts, quiet) # Lazy artifacts
     PackageCompiler.bundle_cert(recipe.output_dir) # SSL certificates
@@ -108,7 +109,7 @@ function remove_unnecessary_libraries(recipe::BundleRecipe)
     bundle_root = recipe.output_dir
     julia_dir = joinpath(bundle_root, recipe.libdir)
     !isdir(julia_dir) && return
-    # If trim is enable remove codegen
+    # PackageCompiler (Julia < 1.14) copies codegen libraries even into trimmed bundles
     if is_trim_enabled(recipe.link_recipe.image_recipe)
         for (root, _, files) in walkdir(julia_dir)
             for f in files

@@ -31,8 +31,10 @@ end
     for (root, _, files) in walkdir(outdir), file in files
         push!(bundled, file)
     end
-    for lib in JuliaC.runtime_libraries(; codegen=false)
-        @test basename(lib) in bundled
+    if JuliaC._JULIA_DECLARES_RUNTIME_LIBRARIES
+        for lib in JuliaC.runtime_libraries(; codegen=false)
+            @test basename(lib) in bundled
+        end
     end
     @test !any(f -> startswith(f, "libLLVM") || startswith(f, "libjulia-codegen"), bundled)
 
@@ -40,7 +42,7 @@ end
     # with a system copy.
     if Sys.islinux()
         installed = Set{String}()
-        for dir in (JuliaC.julia_private_shlibdir(), JuliaC.julia_shlibdir())
+        for dir in (JuliaC.JuliaConfig.private_libDir(), JuliaC.JuliaConfig.libDir())
             isdir(dir) && union!(installed, readdir(dir))
         end
         # `libgcc_s.so` is a linker script, not ELF

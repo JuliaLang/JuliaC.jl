@@ -1,53 +1,35 @@
-# Julia 1.14 lists the libraries its runtime needs; older versions use
-# `runtime_libraries_compat.jl`. The Base functions are internal, so check for them rather
-# than for a version.
-
+# Julia 1.14 lists the libraries its runtime needs; older versions use PackageCompiler's
+# hardcoded list. The Base functions are internal, so check for them rather than for a version.
 const _JULIA_DECLARES_RUNTIME_LIBRARIES = isdefined(Base.Linking, :runtime_libraries)
-
-@static if !_JULIA_DECLARES_RUNTIME_LIBRARIES
-    include("runtime_libraries_compat.jl")
-end
-
-# shared library directory (`bin` on Windows, `lib` elsewhere) and private library directory
-julia_shlibdir() = JuliaConfig.libDir()
-julia_private_shlibdir() = JuliaConfig.private_libDir()
 
 """
     runtime_libraries(; codegen::Bool=true) -> Vector{String}
 
 Paths of the shared libraries, including version symlinks, that a program embedding this
 Julia's runtime needs. `codegen=false` (for `--trim`) leaves out `libjulia-codegen` and LLVM.
+Requires Julia 1.14.
 """
 function runtime_libraries(; codegen::Bool=true)
-    @static if _JULIA_DECLARES_RUNTIME_LIBRARIES
-        components = codegen ? Base.Linking.DEFAULT_COMPONENTS :
-                               filter(!=(:codegen), Base.Linking.DEFAULT_COMPONENTS)
-        return Base.Linking.runtime_libraries(; optional_components = components)
-    else
-        return library_files(runtime_library_names_compat(; codegen))
-    end
+    components = codegen ? Base.Linking.DEFAULT_COMPONENTS :
+                           filter(!=(:codegen), Base.Linking.DEFAULT_COMPONENTS)
+    return Base.Linking.runtime_libraries(; optional_components = components)
 end
 
 """
     stdlib_libraries(stdlib) -> Vector{String}
 
 Paths of the shared libraries that `stdlib` (e.g. `OpenBLAS_jll`) ships inside the Julia
-installation rather than as an artifact.
+installation rather than as an artifact. Requires Julia 1.14.
 """
 stdlib_libraries(stdlib::AbstractString) =
-    library_files(get(Vector{String}, PackageCompiler.jll_mapping, stdlib))
-
-@static if _JULIA_DECLARES_RUNTIME_LIBRARIES
-    const library_files = Base.Linking.library_files
-else
-    const library_files = library_files_compat
-end
+    Base.Linking.library_files(get(Vector{String}, PackageCompiler.jll_mapping, stdlib))
 
 """
     bundle_libraries(recipe::BundleRecipe, stdlibs) -> PackageCompiler.BundledLibraries
 
 Copy the runtime libraries and those of `stdlibs` into the bundle, at the same path relative
 to the library directory as in the installation, which is where `libjulia` looks for them.
+Requires Julia 1.14.
 """
 function bundle_libraries(recipe::BundleRecipe, stdlibs)
     # create `lib/julia` even when a source build keeps its libraries in `lib`
@@ -82,7 +64,8 @@ function _install_library(recipe::BundleRecipe, src::String)
 end
 
 function _bundle_destination(recipe::BundleRecipe, lib::String)
-    rel = relpath(dirname(lib), julia_shlibdir())
+    # `bin` on Windows, `lib` elsewhere
+    rel = relpath(dirname(lib), JuliaConfig.libDir())
     # outside the library directory: use `julia/`, where the loader looks
     startswith(rel, "..") && (rel = "julia")
     return normpath(joinpath(recipe.output_dir::String, recipe.libdir, rel, basename(lib)))
