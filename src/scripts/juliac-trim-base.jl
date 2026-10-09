@@ -232,10 +232,18 @@ end
 end
 
 @eval Base.Libc.Libdl begin
-    @noinline _invoke_on_load_callback(@nospecialize(cb)) = error(
+    if isdefined(@__MODULE__, :LazyLibraryCallback)
+        # `--trim` compiles all `LazyLibraryCallback`s, so only those are callable
+        @noinline function _invoke_on_load_callback(@nospecialize(cb))
+            cb isa LazyLibraryCallback || _throw_unsupported_on_load_callback(cb)
+            return cb()
+        end
+    else
+        @noinline _invoke_on_load_callback(@nospecialize(cb)) = _throw_unsupported_on_load_callback(cb)
+    end
+    @noinline _throw_unsupported_on_load_callback(@nospecialize(cb)) = error(
         "LazyLibrary on_load_callback of type `", typeof(cb).name.name,
-        "` is not supported under --trim; register a C entry point via ",
-        "_on_load_c_callback instead"
+        "` is not supported under --trim; it must be a `Libdl.LazyLibraryCallback`"
     )
 
     @noinline _throw_unsupported_path_piece(@nospecialize(p)) = error(
@@ -243,6 +251,14 @@ end
         "` is not supported under --trim; pieces must be String, ",
         "SubString{String}, or PrivateShlibdirGetter"
     )
+
+    if isdefined(@__MODULE__, :_lazy_library_path_string)
+        @noinline _lazy_library_path_string(@nospecialize(path)) =
+            path isa String          ? path :
+            path isa LazyLibraryPath ? string(path) :
+            error("LazyLibrary path of type `", typeof(path).name.name,
+                  "` is not supported under --trim; it must be a String or LazyLibraryPath")
+    end
 
     function Base.string(llp::LazyLibraryPath)
         n = nfields(llp.pieces)
