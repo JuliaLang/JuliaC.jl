@@ -12,7 +12,17 @@ Requires Julia 1.14.
 function runtime_libraries(; codegen::Bool=true)
     components = codegen ? Base.Linking.DEFAULT_COMPONENTS :
                            filter(!=(:codegen), Base.Linking.DEFAULT_COMPONENTS)
-    return Base.Linking.runtime_libraries(; optional_components = components)
+    libs = Base.Linking.runtime_libraries(; optional_components = components)
+
+    # HACK: Base loads PCRE as `libpcre2-8.dll` (unversioned DLL) on Windows, which
+    #       is not bundled / reported by `runtime_libraries(...)` by default.
+    # TODO: Remove when JuliaLang/julia#63686 is merged
+    if Sys.iswindows()
+        pcre = joinpath(Sys.BINDIR, "libpcre2-8.dll")
+        isfile(pcre) && !any(lib -> samefile(lib, pcre), libs) && push!(libs, pcre)
+    end
+
+    return libs
 end
 
 """
