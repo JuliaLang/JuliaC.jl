@@ -93,6 +93,19 @@ function c_shim_compile_cmd(recipe::ImageRecipe, csrc::AbstractString, obj::Abst
     return `$(get_compiler_cmd()) $cflags -c $csrc -o $obj`
 end
 
+# `Base.julia_cmd` forwards many codegen-relevant args by default. These affect the compiled
+# product(s), so we filter them and require these to be passed via `recipe.julia_args` instead.
+const SESSION_CODEGEN_OPTIONS = ("--code-coverage", "--track-allocation", "--check-bounds",
+                                 "--inline", "--min-optlevel", "--compile=")
+
+# `Base.julia_cmd`, without this session's code generation options (including `-O` and `-g`)
+function build_julia_cmd(; kwargs...)
+    cmd = Base.julia_cmd(; kwargs...)
+    return Cmd(filter(cmd.exec) do arg
+        !(any(opt -> startswith(arg, opt), SESSION_CODEGEN_OPTIONS) || occursin(r"^-[Og]\d$", arg))
+    end)
+end
+
 # Build for the same CPUs as Julia's own system image (Julia 1.13+ only)
 function default_cpu_target()
     isdefined(Sys, :sysimage_target) || return nothing
@@ -131,7 +144,7 @@ function compile_products(recipe::ImageRecipe)
     if recipe.cpu_target === nothing
         recipe.cpu_target = get(default_cpu_target, ENV, "JULIA_CPU_TARGET")
     end
-    julia_cmd = `$(Base.julia_cmd(;cpu_target=recipe.cpu_target)) --startup-file=no --history-file=no`
+    julia_cmd = `$(build_julia_cmd(;cpu_target=recipe.cpu_target)) --startup-file=no --history-file=no`
     if recipe.cpu_target !== nothing
         precompile_cpu_target = String(first(split(recipe.cpu_target, [';',','])))
     else
@@ -189,7 +202,7 @@ function compile_products(recipe::ImageRecipe)
     end
 
     # Package precompilation reads JULIA_CPU_TARGET, not `-C`
-    inst_cmd = addenv(`$(Base.julia_cmd(cpu_target=precompile_cpu_target)) --project=$project_arg -e "using Pkg; Pkg.instantiate(); Pkg.precompile()"`,
+    inst_cmd = addenv(`$(build_julia_cmd(cpu_target=precompile_cpu_target)) --project=$project_arg -e "using Pkg; Pkg.instantiate(); Pkg.precompile()"`,
                       env_overrides..., "JULIA_CPU_TARGET" => precompile_cpu_target)
     recipe.verbose && println("Running: $inst_cmd")
     precompile_time = time_ns()
