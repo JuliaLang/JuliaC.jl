@@ -90,6 +90,15 @@ function _test_nested_reductions()
     return string("nested reductions: ", counted, " ", summed)
 end
 
+# regular expressions, which need the PCRE library to be bundled
+function _test_regex()
+    m = match(r"(\w+)@(\w+)\.org", "contact: julia@julialang.org")
+    user = m === nothing ? "" : something(m[1], "")
+    replaced = replace("a1b22c333", r"\d+" => "#")
+    vowels = count(_ -> true, eachmatch(r"[aeiou]", "trimmed regex"))
+    return string("regex: ", user, " ", replaced, " ", vowels, " ", occursin(r"^tr", "trim"))
+end
+
 function @main(args::Vector{String})::Cint
     println(Core.stdout, str())
     println(Core.stdout, PROGRAM_FILE)
@@ -110,6 +119,7 @@ function @main(args::Vector{String})::Cint
 
     println(Core.stdout, _test_cat())
     println(Core.stdout, _test_nested_reductions())
+    println(Core.stdout, _test_regex())
 
     try
         sock = connect("localhost", 4900)
