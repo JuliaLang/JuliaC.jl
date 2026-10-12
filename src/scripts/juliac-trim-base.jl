@@ -254,10 +254,12 @@ end
 
     if isdefined(@__MODULE__, :_lazy_library_path_string)
         @noinline _lazy_library_path_string(@nospecialize(path)) =
-            path isa String          ? path :
-            path isa LazyLibraryPath ? string(path) :
+            path isa String              ? path :
+            path isa LazyLibraryPath     ? string(path) :
+            path isa LazyLibraryCallback ? path()::String :
             error("LazyLibrary path of type `", typeof(path).name.name,
-                  "` is not supported under --trim; it must be a String or LazyLibraryPath")
+                  "` is not supported under --trim; it must be a String, a LazyLibraryPath, ",
+                  "or a LazyLibraryCallback that returns the path")
     end
 
     function Base.string(llp::LazyLibraryPath)
