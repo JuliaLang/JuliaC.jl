@@ -113,6 +113,24 @@ function default_cpu_target()
     return readchomp(`$(Base.julia_cmd()) --startup-file=no --history-file=no -e "print(Sys.sysimage_target())"`)
 end
 
+function expand_sysimage_target(cpu_target::AbstractString)
+    (cpu_target == "sysimage" || startswith(cpu_target, "sysimage;")) || return String(cpu_target)
+    target = default_cpu_target()
+    target === nothing && return String(cpu_target)
+    return target * chopprefix(cpu_target, "sysimage")
+end
+
+function is_cpu_target_directive(tok::AbstractString)
+    name = (startswith(tok, '+') || startswith(tok, '-')) ? SubString(tok, 2) : tok
+    return name in ("clone_all", "opt_size", "min_size") ||
+           (startswith(name, "base(") && endswith(name, ")"))
+end
+
+function first_cpu_target(cpu_target::AbstractString)
+    tokens = split(first(split(cpu_target, ';')), ',')
+    return join([first(tokens); filter(!is_cpu_target_directive, tokens[2:end])], ',')
+end
+
 function compile_products(recipe::ImageRecipe)
     # Only strip IR / metadata if not `--trim=no`
     strip_args = String[]
@@ -144,11 +162,8 @@ function compile_products(recipe::ImageRecipe)
     if recipe.cpu_target === nothing
         recipe.cpu_target = get(default_cpu_target, ENV, "JULIA_CPU_TARGET")
     end
-    julia_cmd = `$(build_julia_cmd(;cpu_target=recipe.cpu_target)) --startup-file=no --history-file=no`
     if recipe.cpu_target !== nothing
-        precompile_cpu_target = String(first(split(recipe.cpu_target, [';',','])))
-    else
-        precompile_cpu_target = nothing
+        recipe.cpu_target = expand_sysimage_target(recipe.cpu_target)
     end
     # Ensure the app project is instantiated and precompiled
     if isdir(recipe.file)
@@ -201,9 +216,9 @@ function compile_products(recipe::ImageRecipe)
         )
     end
 
-    # Package precompilation reads JULIA_CPU_TARGET, not `-C`
-    inst_cmd = addenv(`$(build_julia_cmd(cpu_target=precompile_cpu_target)) --project=$project_arg -e "using Pkg; Pkg.instantiate(); Pkg.precompile()"`,
-                      env_overrides..., "JULIA_CPU_TARGET" => precompile_cpu_target)
+    jit_target = recipe.cpu_target === nothing ? nothing : first_cpu_target(recipe.cpu_target)
+    inst_cmd = addenv(`$(build_julia_cmd(cpu_target=jit_target)) --project=$project_arg -e "using Pkg; Pkg.instantiate(); Pkg.precompile()"`,
+                      env_overrides..., "JULIA_CPU_TARGET" => recipe.cpu_target)
     recipe.verbose && println("Running: $inst_cmd")
     precompile_time = time_ns()
     if !run_with_suppressed_output(inst_cmd; quiet=recipe.quiet)
@@ -218,7 +233,7 @@ function compile_products(recipe::ImageRecipe)
         recipe.img_path = joinpath(tmpdir, "image.o.a")
     end
     # Build command incrementally to guarantee proper token separation
-    cmd = julia_cmd
+    cmd = `$(build_julia_cmd(;cpu_target=recipe.cpu_target)) --startup-file=no --history-file=no`
     cmd = `$cmd --project=$project_arg $(image_arg) $(recipe.img_path) --output-incremental=no`
     for a in strip_args
         cmd = `$cmd $a`

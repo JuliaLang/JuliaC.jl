@@ -1,0 +1,9 @@
+name = "CpuTargetProject"
+uuid = "63a961b6-df95-408e-b212-dab70a0c8733"
+version = "0.1.0"
+
+[deps]
+CpuTargetDep = "6c0f1e50-f17c-460a-8e84-8cb2c32eafcc"
+
+[sources]
+CpuTargetDep = {path = "../CpuTargetDep"}
