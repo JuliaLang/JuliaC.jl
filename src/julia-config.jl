@@ -87,7 +87,10 @@ function ldlibs(; framework::Bool=false, rpath::Bool=true)
             return ["-L" * private_libDir()]
         end
     else
-        return ["-l" * libname, "-lopenlibm"]
+        libs = ["-l" * libname]
+        # Newer versions of Julia do not ship openlibm
+        Base.libm_name == "libopenlibm" && push!(libs, "-lopenlibm")
+        return libs
     end
 end
 
