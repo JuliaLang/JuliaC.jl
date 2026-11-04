@@ -4,10 +4,17 @@
 
 # Initialize some things not usually initialized when output is requested
 Sys.__init__()
-Base.reinit_stdio()
-Base.init_depot_path()
-Base.init_load_path()
-Base.init_active_project()
+if isdefined(Base, :__preinit__)
+    Base.__preinit__()
+else
+    Base.reinit_stdio()
+    Base.init_depot_path()
+    Base.init_load_path()
+    Base.init_active_project()
+    if Base.get_bool_env("JULIA_USE_FLISP_PARSER", false) === false
+        Base.JuliaSyntax.enable_in_core!()
+    end
+end
 task = current_task()
 task.rngState0 = 0x5156087469e170ab
 task.rngState1 = 0x7431eaead385992c
@@ -16,9 +23,6 @@ task.rngState3 = 0x3a77f7189200c20b
 task.rngState4 = 0x5502376d099035ae
 uuid_tuple = (UInt64(0), UInt64(0))
 ccall(:jl_set_module_uuid, Cvoid, (Any, NTuple{2, UInt64}), Base.__toplevel__, uuid_tuple)
-if Base.get_bool_env("JULIA_USE_FLISP_PARSER", false) === false
-    Base.JuliaSyntax.enable_in_core!()
-end
 
 # Parse named arguments (avoid soft scope issues by using a `let` block)
 #
