@@ -27,8 +27,6 @@ end
     set_active_project(projfile::Union{AbstractString,Nothing}) = ACTIVE_PROJECT[] = projfile
     disable_library_threading() = nothing
     start_profile_listener() = nothing
-    invokelatest_trimmed(f, args...; kwargs...) = f(args...; kwargs...)
-    const invokelatest = invokelatest_trimmed
     function sprint(f::F, args::Vararg{Any,N}; context=nothing, sizehint::Integer=0) where {F<:Function,N}
         s = IOBuffer(sizehint=sizehint)
         if context isa Tuple
