@@ -190,3 +190,12 @@ end
     BINDIR = ""
     STDLIB = ""
 end
+
+# rebinding `invokelatest` invalidates the frontend's entrypoints, so keep
+# this last to avoid re-inferring JuliaLowering
+if Base.JLOptions().trim != 0
+    @eval Base begin
+        invokelatest_trimmed(f, args...; kwargs...) = f(args...; kwargs...)
+        const invokelatest = invokelatest_trimmed
+    end
+end
