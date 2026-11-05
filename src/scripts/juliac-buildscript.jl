@@ -3,10 +3,8 @@
 # Script to run in the process that generates juliac's object file output
 
 # Initialize some things not usually initialized when output is requested
-Sys.__init__()
-if isdefined(Base, :__preinit__)
-    Base.__preinit__()
-else
+if !isdefined(Base, :__init_build)
+    Sys.__init__()
     Base.reinit_stdio()
     Base.init_depot_path()
     Base.init_load_path()
@@ -14,13 +12,13 @@ else
     if Base.get_bool_env("JULIA_USE_FLISP_PARSER", false) === false
         Base.JuliaSyntax.enable_in_core!()
     end
+    task = current_task()
+    task.rngState0 = 0x5156087469e170ab
+    task.rngState1 = 0x7431eaead385992c
+    task.rngState2 = 0x503e1d32781c2608
+    task.rngState3 = 0x3a77f7189200c20b
+    task.rngState4 = 0x5502376d099035ae
 end
-task = current_task()
-task.rngState0 = 0x5156087469e170ab
-task.rngState1 = 0x7431eaead385992c
-task.rngState2 = 0x503e1d32781c2608
-task.rngState3 = 0x3a77f7189200c20b
-task.rngState4 = 0x5502376d099035ae
 uuid_tuple = (UInt64(0), UInt64(0))
 ccall(:jl_set_module_uuid, Cvoid, (Any, NTuple{2, UInt64}), Base.__toplevel__, uuid_tuple)
 
@@ -180,17 +178,19 @@ end
 entrypoint(Base.trypoptask, (Base.StickyWorkqueue,))
 entrypoint(Base.checktaskempty, ())
 
-empty!(Core.ARGS)
-empty!(Base.ARGS)
-empty!(LOAD_PATH)
-empty!(DEPOT_PATH)
-empty!(Base.TOML_CACHE.d)
-Base.TOML.reinit!(Base.TOML_CACHE.p, "")
-Base.ACTIVE_PROJECT[] = nothing
-@eval Base begin
-    PROGRAM_FILE = ""
-end
-@eval Sys begin
-    BINDIR = ""
-    STDLIB = ""
+if !isdefined(Base, :__uninit_build)
+    empty!(Core.ARGS)
+    empty!(Base.ARGS)
+    empty!(LOAD_PATH)
+    empty!(DEPOT_PATH)
+    empty!(Base.TOML_CACHE.d)
+    Base.TOML.reinit!(Base.TOML_CACHE.p, "")
+    Base.ACTIVE_PROJECT[] = nothing
+    @eval Base begin
+        PROGRAM_FILE = ""
+    end
+    @eval Sys begin
+        BINDIR = ""
+        STDLIB = ""
+    end
 end
