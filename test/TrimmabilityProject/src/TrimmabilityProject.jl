@@ -99,6 +99,16 @@ function _test_regex()
     return string("regex: ", user, " ", replaced, " ", vowels, " ", occursin(r"^tr", "trim"))
 end
 
+# `eachindex` over several arrays, compiled into the package image
+function _test_eachindex(a, b, c, d)
+    n = 0
+    for i in eachindex(a, b, c, d)
+        n += a[i] + b[i] > c[i] + d[i]
+    end
+    return string("eachindex: ", length(eachindex(a, b, c, d)), " ", 0 <= n <= 3)
+end
+precompile(_test_eachindex, (Vector{Float64}, Vector{Float64}, Vector{Float64}, Vector{Float64}))
+
 function @main(args::Vector{String})::Cint
     println(Core.stdout, str())
     println(Core.stdout, PROGRAM_FILE)
@@ -120,6 +130,7 @@ function @main(args::Vector{String})::Cint
     println(Core.stdout, _test_cat())
     println(Core.stdout, _test_nested_reductions())
     println(Core.stdout, _test_regex())
+    println(Core.stdout, _test_eachindex(rand(3), rand(3), rand(3), rand(3)))
 
     try
         sock = connect("localhost", 4900)

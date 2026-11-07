@@ -130,6 +130,10 @@ end
         @noinline
         throw(DimensionMismatch("all inputs to eachindex must have the same axes"))
     end
+    function throw_eachindex_mismatch_indices(indices_str::String, inds...)
+        @noinline
+        throw(DimensionMismatch("all inputs to eachindex must have the same " * indices_str))
+    end
     setfield!(typeof(throw_boundserror).name, :max_args, Int32(5), :monotonic)
     setfield!(typeof(throw_eachindex_mismatch_indices).name, :max_args, Int32(5), :monotonic)
     setfield!(typeof(Base.print).name, :max_args, Int32(10), :monotonic)
