@@ -9,6 +9,20 @@ function run_juliac_cli(args::Vector{String}; dir=nothing)
     end
 end
 
+@testset "CLI --output-o / --output-bc write the archive (no link step)" begin
+    outdir = mktempdir()
+    for (flag, name) in (("--output-o", "lib.o.a"), ("--output-bc", "lib.bc.a"))
+        out = joinpath(outdir, "sub", name)
+        img, _, _ = JuliaC._parse_cli_args(String[flag, out, "--trim=safe", "--compile-ccallable", TEST_LIB_SRC])
+        @test img.img_path == abspath(out)
+        @test_throws ErrorException JuliaC._parse_cli_args(String[flag, out, "--bundle", TEST_LIB_SRC])
+    end
+    # end to end: used to fail with "Cannot link --output-bc output type"
+    out = joinpath(outdir, "sub", "lib.bc.a")
+    run_juliac_cli(String["--output-bc", out, "--project", TEST_LIB_PROJ, "--trim=safe", "--compile-ccallable", TEST_LIB_SRC, "--quiet"])
+    @test isfile(out) && filesize(out) > 0
+end
+
 @testset "CLI app entrypoint (trim)" begin
     outdir = mktempdir()
     exename = "app"
