@@ -1,7 +1,7 @@
 using Test
 using JuliaC
 using Libdl
-using Patchelf_jll
+using LIEF_Patchelf_jll
 
 const ROOT = abspath(joinpath(@__DIR__, ".."))
 const TEST_PROJ = abspath(joinpath(@__DIR__, "AppProject"))
@@ -11,7 +11,9 @@ const TEST_LIB_SRC = joinpath(TEST_LIB_PROJ, "src", "libtest.jl")
 
 include("utils.jl")
 
+include("cpu_target.jl")
 include("programatic.jl")
 include("cli.jl")
+include("spaces.jl")
 include("trimming.jl")
 include("quiet.jl")

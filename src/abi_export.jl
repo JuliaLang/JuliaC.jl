@@ -65,7 +65,7 @@ function type_name_json(@nospecialize(dt::DataType))
 end
 
 function field_name_json(@nospecialize(dt::DataType), field::Int)
-    name = String(fieldname(dt, field))
+    name = string(fieldname(dt, field))
     return escape_string_json(name)
 end
 

@@ -82,6 +82,55 @@ function run_with_suppressed_output(cmd::Base.AbstractCmd; quiet::Bool)
     end
 end
 
+"""
+    c_shim_compile_cmd(recipe::ImageRecipe, csrc, obj) -> Cmd
+
+Command compiling the C shim `csrc` into `obj`: Julia's cflags followed by
+`recipe.cflags`, each entry passed to the compiler as one argument.
+"""
+function c_shim_compile_cmd(recipe::ImageRecipe, csrc::AbstractString, obj::AbstractString)
+    cflags = [JuliaConfig.cflags(; framework=false); recipe.cflags]
+    return `$(get_compiler_cmd()) $cflags -c $csrc -o $obj`
+end
+
+# `Base.julia_cmd` forwards many codegen-relevant args by default. These affect the compiled
+# product(s), so we filter them and require these to be passed via `recipe.julia_args` instead.
+const SESSION_CODEGEN_OPTIONS = ("--code-coverage", "--track-allocation", "--check-bounds",
+                                 "--inline", "--min-optlevel", "--compile=")
+
+# `Base.julia_cmd`, without this session's code generation options (including `-O` and `-g`)
+function build_julia_cmd(; kwargs...)
+    cmd = Base.julia_cmd(; kwargs...)
+    return Cmd(filter(cmd.exec) do arg
+        !(any(opt -> startswith(arg, opt), SESSION_CODEGEN_OPTIONS) || occursin(r"^-[Og]\d$", arg))
+    end)
+end
+
+# Build for the same CPUs as Julia's own system image (Julia 1.13+ only)
+function default_cpu_target()
+    isdefined(Sys, :sysimage_target) || return nothing
+    # Ask a new process: loading packages overwrites this value in the current one
+    return readchomp(`$(Base.julia_cmd()) --startup-file=no --history-file=no -e "print(Sys.sysimage_target())"`)
+end
+
+function expand_sysimage_target(cpu_target::AbstractString)
+    (cpu_target == "sysimage" || startswith(cpu_target, "sysimage;")) || return String(cpu_target)
+    target = default_cpu_target()
+    target === nothing && return String(cpu_target)
+    return target * chopprefix(cpu_target, "sysimage")
+end
+
+function is_cpu_target_directive(tok::AbstractString)
+    name = (startswith(tok, '+') || startswith(tok, '-')) ? SubString(tok, 2) : tok
+    return name in ("clone_all", "opt_size", "min_size") ||
+           (startswith(name, "base(") && endswith(name, ")"))
+end
+
+function first_cpu_target(cpu_target::AbstractString)
+    tokens = split(first(split(cpu_target, ';')), ',')
+    return join([first(tokens); filter(!is_cpu_target_directive, tokens[2:end])], ',')
+end
+
 function compile_products(recipe::ImageRecipe)
     # Only strip IR / metadata if not `--trim=no`
     strip_args = String[]
@@ -111,13 +160,10 @@ function compile_products(recipe::ImageRecipe)
         get!(recipe.jl_options, "threads", "1")
     end
     if recipe.cpu_target === nothing
-        recipe.cpu_target = get(ENV,"JULIA_CPU_TARGET", nothing)
+        recipe.cpu_target = get(default_cpu_target, ENV, "JULIA_CPU_TARGET")
     end
-    julia_cmd = `$(Base.julia_cmd(;cpu_target=recipe.cpu_target)) --startup-file=no --history-file=no`
     if recipe.cpu_target !== nothing
-        precompile_cpu_target = String(first(split(recipe.cpu_target, [';',','])))
-    else
-        precompile_cpu_target = nothing
+        recipe.cpu_target = expand_sysimage_target(recipe.cpu_target)
     end
     # Ensure the app project is instantiated and precompiled
     if isdir(recipe.file)
@@ -170,7 +216,9 @@ function compile_products(recipe::ImageRecipe)
         )
     end
 
-    inst_cmd = addenv(`$(Base.julia_cmd(cpu_target=precompile_cpu_target)) --project=$project_arg -e "using Pkg; Pkg.instantiate(); Pkg.precompile()"`, env_overrides...)
+    jit_target = recipe.cpu_target === nothing ? nothing : first_cpu_target(recipe.cpu_target)
+    inst_cmd = addenv(`$(build_julia_cmd(cpu_target=jit_target)) --project=$project_arg -e "using Pkg; Pkg.instantiate(); Pkg.precompile()"`,
+                      env_overrides..., "JULIA_CPU_TARGET" => recipe.cpu_target)
     recipe.verbose && println("Running: $inst_cmd")
     precompile_time = time_ns()
     if !run_with_suppressed_output(inst_cmd; quiet=recipe.quiet)
@@ -185,7 +233,7 @@ function compile_products(recipe::ImageRecipe)
         recipe.img_path = joinpath(tmpdir, "image.o.a")
     end
     # Build command incrementally to guarantee proper token separation
-    cmd = julia_cmd
+    cmd = `$(build_julia_cmd(;cpu_target=recipe.cpu_target)) --startup-file=no --history-file=no`
     cmd = `$cmd --project=$project_arg $(image_arg) $(recipe.img_path) --output-incremental=no`
     for a in strip_args
         cmd = `$cmd $a`
@@ -232,35 +280,16 @@ function compile_products(recipe::ImageRecipe)
         println("Image size: ", Base.format_bytes(img_sz))
     end
     # If C shim sources are provided, compile them to objects for linking stage
-    if !isempty(recipe.c_sources)
-        compiler_cmd = JuliaC.get_compiler_cmd()
-        # Ensure include flags are passed as separate tokens
-        default_cflags = Base.shell_split(JuliaC.JuliaConfig.cflags(; framework=false))
-        user_cflags = String[]
-        for cf in recipe.cflags
-            if startswith(cf, "-I") && cf != "-I"
-                push!(user_cflags, cf)
-            else
-                append!(user_cflags, split(cf))
-            end
+    for csrc in recipe.c_sources
+        obj = replace(csrc, ".c" => ".o")
+        cmdc = c_shim_compile_cmd(recipe, csrc, obj)
+        recipe.verbose && println("Running: $cmdc")
+        try
+            run(cmdc)
+        catch e
+            error("C shim compilation failed: ", e)
         end
-        cflags = isempty(user_cflags) ? default_cflags : vcat(default_cflags, user_cflags)
-        for csrc in recipe.c_sources
-            obj = replace(csrc, ".c" => ".o")
-            try
-                # Build command incrementally to avoid argument concatenation issues
-                cmdc = compiler_cmd
-                for cf in cflags
-                    cmdc = `$cmdc $cf`
-                end
-                cmdc = `$cmdc -c $(csrc) -o $(obj)`
-                recipe.verbose && println("Running: $cmdc")
-                run(cmdc)
-                push!(recipe.extra_objects, obj)
-            catch e
-                error("C shim compilation failed: ", e)
-            end
-        end
+        push!(recipe.extra_objects, obj)
     end
     # Always compile the jl_options shim so that jl_parse_opts runs
     # consistently, even when no explicit options are provided.
@@ -304,7 +333,7 @@ Returns the path to the compiled object file.
 """
 function _compile_jl_options_shim(jl_options::Dict{String,String}; verbose::Bool=false)
     compiler_cmd = JuliaC.get_compiler_cmd()
-    default_cflags = Base.shell_split(JuliaC.JuliaConfig.cflags(; framework=false))
+    default_cflags = JuliaC.JuliaConfig.cflags(; framework=false)
     tmpdir = mktempdir()
     shim_src = joinpath(JuliaC.SCRIPTS_DIR, "juliac-jl-options-shim.c")
     body_hdr = joinpath(tmpdir, "juliac-jl-options-body.h")

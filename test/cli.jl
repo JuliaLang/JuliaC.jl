@@ -25,6 +25,41 @@ end
     @test isfile(actual_exe)
     output = read(`$actual_exe`, String)
     @test occursin("Fast compilation test!", output)
+
+    # every runtime library, and no codegen ones since the app is trimmed
+    bundled = Set{String}()
+    for (root, _, files) in walkdir(outdir), file in files
+        push!(bundled, file)
+    end
+    if JuliaC._JULIA_DECLARES_RUNTIME_LIBRARIES
+        for lib in JuliaC.runtime_libraries(; codegen=false)
+            @test basename(lib) in bundled
+        end
+    end
+    @test !any(f -> startswith(f, "libLLVM") || startswith(f, "libjulia-codegen"), bundled)
+
+    # Every dependency Julia ships must be bundled. A missing one goes unnoticed on machines
+    # with a system copy.
+    if Sys.islinux()
+        installed = Set{String}()
+        for dir in (JuliaC.JuliaConfig.private_libDir(), JuliaC.JuliaConfig.libDir())
+            isdir(dir) && union!(installed, readdir(dir))
+        end
+        # `libgcc_s.so` is a linker script, not ELF
+        is_elf(path) = open(io -> read(io, 4) == b"\x7fELF", path, "r")
+        binaries = String[actual_exe]
+        for (root, _, files) in walkdir(joinpath(outdir, "lib")), file in files
+            path = joinpath(root, file)
+            occursin(".so", file) && !islink(path) && is_elf(path) && push!(binaries, path)
+        end
+        for binary in binaries
+            needed = readchomp(`$(LIEF_Patchelf_jll.lief_patchelf()) --print-needed $binary`)
+            for dep in split(needed, '\n'; keepempty=false)
+                dep in installed || continue # from the system
+                @test dep in bundled
+            end
+        end
+    end
 end
 
 # Windows expects all binaries to be next to each other, so we can't test this
@@ -90,6 +125,13 @@ end
     @test abi["types"][CVectorPair_Float32["fields"][1]["type_id"]]["name"] == "CVector{Float32}"
     @test abi["types"][CVectorPair_Float32["fields"][2]["type_id"]]["name"] == "CVector{Float32}"
     @test CVectorPair_Float32["size"] == sizeof(UInt) * 4
+
+    # A heterogeneous tuple field is numbered: `fieldname` returns an integer
+    # for one, so the name has to be stringified rather than converted.
+    @test any(Bool[type["name"] == "CPairBox" for type in abi["types"]])
+    CPairBox = abi["types"][findfirst(type["name"] == "CPairBox" for type in abi["types"])]
+    inner = abi["types"][CPairBox["fields"][1]["type_id"]]
+    @test [f["name"] for f in inner["fields"]] == ["1", "2"]
 
     # `CTree{Float64}` should have been exported with the correct info
     @test any(Bool[type["name"] == "CTree{Float64}" for type in abi["types"]])

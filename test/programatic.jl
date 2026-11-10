@@ -52,9 +52,11 @@
             salt = JuliaC.salt_for(bun)
             JuliaC.bundle_products(bun)
 
-            julia_dir = joinpath(outdir, "lib", "julia")
-            @test isdir(julia_dir)
-            dylibs = filter(f -> endswith(f, ".dylib") || endswith(f, ".so"), readdir(julia_dir; join=true))
+            # private libraries are in `lib/julia`, or `lib` for a source build
+            lib_dir = joinpath(outdir, "lib")
+            @test isdir(lib_dir)
+            dylibs = [joinpath(root, f) for (root, _, files) in walkdir(lib_dir) for f in files
+                                        if endswith(f, ".dylib") || endswith(f, ".so")]
             salted = filter(f -> occursin("_libjulia", basename(f)), dylibs)
             @test !isempty(salted)
             # The salt is stable across builds.
@@ -63,7 +65,7 @@
                 if Sys.isapple()
                     out = read(`otool -D $(f)`, String)
                 elseif Sys.islinux()
-                    out = read(`$(Patchelf_jll.patchelf()) --print-soname $(f)`, String)
+                    out = read(`$(LIEF_Patchelf_jll.lief_patchelf()) --print-soname $(f)`, String)
                 end
                 @test occursin("_libjulia", out)
             end
@@ -159,7 +161,7 @@
 
             soname = libname * "." * Base.BinaryPlatforms.platform_dlext()
             libpath = joinpath(outdir, "lib", soname)
-            actual_soname = readchomp(`$(Patchelf_jll.patchelf()) --print-soname $(libpath)`)
+            actual_soname = readchomp(`$(LIEF_Patchelf_jll.lief_patchelf()) --print-soname $(libpath)`)
             @test actual_soname == soname
         end
     end
@@ -218,7 +220,7 @@
             libfile_name = libname * "." * Base.BinaryPlatforms.platform_dlext()
             libpath = joinpath(outdir, "lib", libfile_name)
             output = if Sys.islinux()
-                readchomp(`$(Patchelf_jll.patchelf()) --print-rpath $(libpath)`)
+                readchomp(`$(LIEF_Patchelf_jll.lief_patchelf()) --print-rpath $(libpath)`)
             else
                 output = readchomp(`otool -l $(libpath)`)
             end

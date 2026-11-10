@@ -13,6 +13,8 @@ const TRIM_PROJ = abspath(joinpath(@__DIR__, "TrimmabilityProject"))
         output_type = "--output-exe",
         project = TEST_PROJ,
         trim_mode = "safe",
+        # One CPU target, so this only measures trimming
+        cpu_target = "native",
         quiet = true,
     )
     JuliaC.compile_products(img)
@@ -55,15 +57,19 @@ end
     # 4. arg2
     # 5. The sum_areas result: 4.0 + pi = 7.141592653589793
     # 6. _test_cat() result (a Float64)
+    # 7. nested reductions with `init` inside a generator reduction
+    # 8. regular expressions
     output = readchomp(`$actual_exe arg1 arg2`)
     lines = split(output, '\n')
-    @test length(lines) >= 6
+    @test length(lines) >= 8
     @test lines[1] == "Hello, world!"
     @test lines[2] == actual_exe  # PROGRAM_FILE
     @test lines[3] == "arg1"
     @test lines[4] == "arg2"
     @test parse(Float64, lines[5]) ≈ (4.0 + pi)
     @test parse(Float64, lines[6]) isa Float64
+    @test lines[7] == "nested reductions: 2 9.0"
+    @test lines[8] == "regex: julia a#b#c# 4 true"
 end
 
 @testset "Trimming: libsimple.jl C application test" begin

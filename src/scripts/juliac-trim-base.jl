@@ -27,8 +27,6 @@ end
     set_active_project(projfile::Union{AbstractString,Nothing}) = ACTIVE_PROJECT[] = projfile
     disable_library_threading() = nothing
     start_profile_listener() = nothing
-    invokelatest_trimmed(f, args...; kwargs...) = f(args...; kwargs...)
-    const invokelatest = invokelatest_trimmed
     function sprint(f::F, args::Vararg{Any,N}; context=nothing, sizehint::Integer=0) where {F<:Function,N}
         s = IOBuffer(sizehint=sizehint)
         if context isa Tuple
@@ -95,8 +93,15 @@ end
     mapreduce(f::F, op::F2, A::AbstractArrayOrBroadcasted...; kw...) where {F, F2} =
         reduce(op, map(f, A...); kw...)
 
-    _mapreduce_dim(f::F, op::F2, nt, A::AbstractArrayOrBroadcasted, ::Colon) where {F, F2} =
-        mapfoldl_impl(f, op, nt, A)
+    function _mapreduce_dim(f::F, op::F2, nt, A::AbstractArrayOrBroadcasted, ::Colon) where {F, F2}
+        y = iterate(A)
+        y === nothing && return nt
+        v = op(nt, f(y[1]))
+        for x in Iterators.rest(A, y[2])
+            v = op(v, f(x))
+        end
+        return v
+    end
 
     _mapreduce_dim(f::F, op::F2, ::_InitialValue, A::AbstractArrayOrBroadcasted, ::Colon) where {F, F2} =
         _mapreduce(f, op, IndexStyle(A), A)
@@ -222,4 +227,49 @@ end
 
 @eval Base.CoreLogging begin
     @inline current_logger_for_env(std_level::LogLevel, group, _module) = nothing
+end
+
+@eval Base.Libc.Libdl begin
+    if isdefined(@__MODULE__, :LazyLibraryCallback)
+        # `--trim` compiles all `LazyLibraryCallback`s, so only those are callable
+        @noinline function _invoke_on_load_callback(@nospecialize(cb))
+            cb isa LazyLibraryCallback || _throw_unsupported_on_load_callback(cb)
+            return cb()
+        end
+    else
+        @noinline _invoke_on_load_callback(@nospecialize(cb)) = _throw_unsupported_on_load_callback(cb)
+    end
+    @noinline _throw_unsupported_on_load_callback(@nospecialize(cb)) = error(
+        "LazyLibrary on_load_callback of type `", typeof(cb).name.name,
+        "` is not supported under --trim; it must be a `Libdl.LazyLibraryCallback`"
+    )
+
+    @noinline _throw_unsupported_path_piece(@nospecialize(p)) = error(
+        "LazyLibraryPath path segment of type `", typeof(p).name.name,
+        "` is not supported under --trim; pieces must be String, ",
+        "SubString{String}, or PrivateShlibdirGetter"
+    )
+
+    if isdefined(@__MODULE__, :_lazy_library_path_string)
+        @noinline _lazy_library_path_string(@nospecialize(path)) =
+            path isa String              ? path :
+            path isa LazyLibraryPath     ? string(path) :
+            path isa LazyLibraryCallback ? path()::String :
+            error("LazyLibrary path of type `", typeof(path).name.name,
+                  "` is not supported under --trim; it must be a String, a LazyLibraryPath, ",
+                  "or a LazyLibraryCallback that returns the path")
+    end
+
+    function Base.string(llp::LazyLibraryPath)
+        n = nfields(llp.pieces)
+        parts = Vector{String}(undef, n)
+        for i in 1:n
+            p = getfield(llp.pieces, i)
+            parts[i] = p isa String                ? p :
+                       p isa SubString{String}     ? String(p) :
+                       p isa PrivateShlibdirGetter ? string(p) :
+                       _throw_unsupported_path_piece(p)
+        end
+        return joinpath(parts)
+    end
 end
