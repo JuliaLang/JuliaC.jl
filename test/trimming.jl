@@ -59,9 +59,10 @@ end
     # 6. _test_cat() result (a Float64)
     # 7. nested reductions with `init` inside a generator reduction
     # 8. regular expressions
+    # 9. `eachindex` over four arrays
     output = readchomp(`$actual_exe arg1 arg2`)
     lines = split(output, '\n')
-    @test length(lines) >= 8
+    @test length(lines) >= 9
     @test lines[1] == "Hello, world!"
     @test lines[2] == actual_exe  # PROGRAM_FILE
     @test lines[3] == "arg1"
@@ -70,6 +71,7 @@ end
     @test parse(Float64, lines[6]) isa Float64
     @test lines[7] == "nested reductions: 2 9.0"
     @test lines[8] == "regex: julia a#b#c# 4 true"
+    @test lines[9] == "eachindex: 3 true"
 end
 
 @testset "Trimming: libsimple.jl C application test" begin
