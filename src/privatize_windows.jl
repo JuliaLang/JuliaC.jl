@@ -50,9 +50,12 @@ function manifest_identity_for(product_path::AbstractString, salt::AbstractStrin
     return string("JuliaC.PrivateRuntime.", safe, ".", salt)
 end
 
-# The libjulia DLLs the manifest may redirect.
-const LIBJULIA_DLL_CANDIDATES =
-    ("libjulia.dll", "libjulia-internal.dll", "libjulia-codegen.dll")
+# The libjulia DLLs the manifest may redirect, loader first. A debug build of Julia names
+# them `*-debug.dll`.
+function libjulia_dll_candidates()
+    suffix = Base.isdebugbuild() ? "-debug" : ""
+    return ("libjulia$suffix.dll", "libjulia-internal$suffix.dll", "libjulia-codegen$suffix.dll")
+end
 
 """
     next_free_section_vma(product_path) -> UInt64
@@ -89,21 +92,19 @@ loader resolves those DLLs from the product's own directory:
    reports.
 3. Patch the COFF optional header's ResourceTable data directory and the section's own
    manifest address/size fields.
+
+A product that already has a `.rsrc` section is rejected: its resources would have to be
+merged with the manifest, which this does not do.
 """
 function inject_private_manifest!(product_path, dll_names, salt::AbstractString)
+    has_rsrc = open(product_path) do io
+        findfirst(Sections(only(ObjectFile.readmeta(io))), ".rsrc") !== nothing
+    end
+    has_rsrc && error("$product_path already has a `.rsrc` section (resources linked into ",
+                      "the product, or an earlier privatization); cannot add the manifest")
+
     header = read(joinpath(TEMPLATE_DIR, "rsrc.bin"))
     manifest = generate_manifest_xml(manifest_identity_for(product_path, salt), dll_names)
-
-    # The payload ends on a 4-byte boundary: resource data is read as UInt32 fields.
-    sectionfile = joinpath(dirname(product_path), "rsrc.bin")
-    open(sectionfile, "w") do rsrc_bin
-        write(rsrc_bin, header)
-        write(rsrc_bin, manifest)
-        if length(manifest) % sizeof(UInt32) != 0
-            padding_size = sizeof(UInt32) - length(manifest) % sizeof(UInt32)
-            write(rsrc_bin, zeros(UInt8, padding_size))
-        end
-    end
 
     # `--change-section-address` is mandatory: objcopy defaults a new section to VMA 0, below
     # the image base, warns "section below image base", exits 0 anyway, and leaves an RVA
@@ -111,8 +112,18 @@ function inject_private_manifest!(product_path, dll_names, salt::AbstractString)
     # valid Win32 application").
     objcopy = mingw_tool("objcopy.exe")
     rsrc_vma = next_free_section_vma(product_path)
-    run(`$objcopy --add-section .rsrc=$sectionfile --set-section-flags .rsrc=data --change-section-address .rsrc=$(rsrc_vma) $product_path`)
-    rm(sectionfile)
+    sectionfile = tempname()
+    try
+        # The payload ends on a 4-byte boundary: resource data is read as UInt32 fields.
+        open(sectionfile, "w") do rsrc_bin
+            write(rsrc_bin, header)
+            write(rsrc_bin, manifest)
+            write(rsrc_bin, zeros(UInt8, mod(-length(manifest), sizeof(UInt32))))
+        end
+        run(`$objcopy --add-section .rsrc=$sectionfile --set-section-flags .rsrc=data --change-section-address .rsrc=$(rsrc_vma) $product_path`)
+    finally
+        rm(sectionfile; force=true)
+    end
 
     open(product_path; read=true, write=true, create=false, truncate=false) do io
         oh = only(ObjectFile.readmeta(io))
@@ -170,8 +181,9 @@ function fix_libjulia_libpath!(libjulia_path, present_dlls::Vector{String}, salt
     data = read(libjulia_path)
     # Anchor on the one entry every Julia ships. The list reads
     # "libgcc_s_seh-1.dll:libopenlibm.dll:@:@libjulia-internal.dll:@libjulia-codegen.dll:\0",
-    # where a leading `@` means "relative to the loader's own directory".
-    anchor = findfirst(codeunits("@libjulia-internal.dll:"), data)
+    # where a leading `@` marks an entry the loader handles specially instead of preloading
+    # (in order: libstdc++, libjulia-internal, libjulia-codegen); it expects all three.
+    anchor = findfirst(codeunits("@libjulia-internal"), data)
     anchor === nothing && error("could not locate the embedded dependency list in $(libjulia_path)")
     lo = something(findprev(iszero, data, first(anchor)), 0) + 1
     hi = something(findnext(iszero, data, first(anchor)), lastindex(data) + 1) - 1
@@ -192,7 +204,7 @@ function fix_libjulia_libpath!(libjulia_path, present_dlls::Vector{String}, salt
 end
 
 function present_libjulia_dlls(bindir)
-    return [dll for dll in LIBJULIA_DLL_CANDIDATES if isfile(joinpath(bindir, dll))]
+    return [dll for dll in libjulia_dll_candidates() if isfile(joinpath(bindir, dll))]
 end
 
 """
@@ -220,14 +232,18 @@ function privatize_libjulia_windows!(recipe::BundleRecipe, salt::String)
         # The Windows bundle libdir is "bin", holding the product and its DLLs together.
         bindir = joinpath(recipe.output_dir, recipe.libdir)
         product = recipe.link_recipe.outname
-        libjulia = joinpath(bindir, "libjulia.dll")
+        libjulia = joinpath(bindir, first(libjulia_dll_candidates()))
 
         dll_names = present_libjulia_dlls(bindir)
         isempty(dll_names) && error("no libjulia*.dll found in $bindir to privatize")
 
-        # libLLVM must be redirected too (see `present_libllvm_dlls`), but stays out of
-        # `dll_names`: `fix_libjulia_libpath!` rewrites only `libjulia*` dep-list entries.
-        inject_private_manifest!(product, vcat(dll_names, present_libllvm_dlls(bindir)), salt)
+        # An executable needs no manifest: its own directory is the first place its process
+        # looks for DLLs, and no other runtime is loaded ahead of it.
+        if recipe.link_recipe.image_recipe.output_type != "--output-exe"
+            # libLLVM must be redirected too (see `present_libllvm_dlls`), but stays out of
+            # `dll_names`: `fix_libjulia_libpath!` rewrites only `libjulia*` dep-list entries.
+            inject_private_manifest!(product, vcat(dll_names, present_libllvm_dlls(bindir)), salt)
+        end
         fix_libjulia_libpath!(libjulia, dll_names, salt)
     catch e
         error("Failed to privatize libjulia on Windows", e)
