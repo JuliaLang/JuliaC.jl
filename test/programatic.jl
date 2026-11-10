@@ -267,6 +267,109 @@
             @test ver.minor == 32767
         end
     end
+
+    @testset "Privatization (Windows, trimmed)" begin
+        # A trimmed bundle ships neither libjulia-codegen.dll nor libLLVM.
+        if Sys.iswindows()
+            outdir = mktempdir()
+            libname = "libwinprivtest"
+            link = JuliaC.LinkRecipe(image_recipe=img_lib, outname=joinpath(outdir, libname),
+                                     rpath=JuliaC.RPATH_BUNDLE)
+            JuliaC.link_products(link)
+            JuliaC.bundle_products(JuliaC.BundleRecipe(link_recipe=link, output_dir=outdir, privatize=true))
+
+            bindir = joinpath(outdir, "bin")
+            product = joinpath(bindir, libname * "." * Base.BinaryPlatforms.platform_dlext())
+            @test isfile(product)
+            @test JuliaC.present_libjulia_dlls(bindir) == ["libjulia.dll", "libjulia-internal.dll"]
+
+            # The product PE now has a .rsrc section.
+            rsrc_va = open(product) do io
+                oh = only(JuliaC.ObjectFile.readmeta(io))
+                rsrc = JuliaC.ObjectFile.findfirst(JuliaC.ObjectFile.Sections(oh), ".rsrc")
+                @test rsrc !== nothing
+                rsrc === nothing ? UInt32(0) : UInt32(JuliaC.ObjectFile.section_address(rsrc))
+            end
+
+            # The optional header's ResourceTable data directory points at it; the raw
+            # seek/read gives an independent check that the COFF patch landed.
+            rt = open(product) do io
+                seek(io, 0x3C); pe_off = read(io, UInt32)
+                opt_hdr = pe_off + 4 + 20                 # PE sig (4) + COFF header (20)
+                seek(io, opt_hdr); magic = read(io, UInt16)
+                # 64-bit: standard(24) + windows64(88) = 112 to the data directories;
+                # 32-bit: standard(24) + BaseOfData(4) + windows32(68) = 96.
+                dd = opt_hdr + (magic == 0x20b ? 112 : 96)
+                seek(io, dd + 0x10)                        # ResourceTable slot
+                (va = read(io, UInt32), size = read(io, UInt32))
+            end
+            @test rt.va == rsrc_va
+            @test rt.va != 0
+            @test rt.size != 0
+
+            # A product that already carries resources is rejected up front.
+            @test_throws "already has a `.rsrc` section" JuliaC.inject_private_manifest!(product, ["libjulia.dll"], "salt")
+
+            # The bundled loader's dependency list survives, with the entry for the
+            # unshipped libjulia-codegen.dll salted away.
+            loaderbytes = String(read(joinpath(bindir, "libjulia.dll")))
+            @test occursin("@libjulia-internal.dll:", loaderbytes)
+            @test !occursin("libjulia-codegen.dll", loaderbytes)
+
+            # Loaded into a live Julia session, the product runs on private copies of the
+            # shipped DLLs and on the runtime's codegen stubs. Binding the host's
+            # already-loaded codegen instead aborts in jl_init_llvm ("Library already loaded").
+            loaded = load_in_julia_process(product)
+            @test success(loaded.proc)
+            @test occursin("RESULT=42", loaded.output)
+            bundled_dir = lowercase(abspath(bindir))
+            @test bundled_dir in get(loaded.dirs_by_dll, "libjulia.dll", Set{String}())
+            @test bundled_dir in get(loaded.dirs_by_dll, "libjulia-internal.dll", Set{String}())
+            @test !(bundled_dir in get(loaded.dirs_by_dll, "libjulia-codegen.dll", Set{String}()))
+        end
+    end
+
+    @testset "Privatization (Windows, untrimmed)" begin
+        # Without --trim all runtime DLLs ship, and a Julia session that loads the product
+        # must end up with each of them loaded twice: its own copy and the bundle's.
+        if Sys.iswindows()
+            img_untrimmed = JuliaC.ImageRecipe(
+                file = TEST_LIB_SRC,
+                output_type = "--output-lib",
+                project = TEST_LIB_PROJ,
+                add_ccallables = true,
+                quiet = true,
+            )
+            JuliaC.compile_products(img_untrimmed)
+
+            outdir = mktempdir()
+            libname = "libwinprivloadtest"
+            link = JuliaC.LinkRecipe(image_recipe=img_untrimmed, outname=joinpath(outdir, libname),
+                                     rpath=JuliaC.RPATH_BUNDLE)
+            JuliaC.link_products(link)
+            JuliaC.bundle_products(JuliaC.BundleRecipe(link_recipe=link, output_dir=outdir, privatize=true))
+
+            bindir = joinpath(outdir, "bin")
+            product = joinpath(bindir, libname * "." * Base.BinaryPlatforms.platform_dlext())
+            @test isfile(product)
+
+            # The DLLs the manifest redirects. libLLVM is one: see `JuliaC.present_libllvm_dlls`.
+            bundled = vcat(JuliaC.present_libjulia_dlls(bindir), JuliaC.present_libllvm_dlls(bindir))
+            @test "libjulia.dll" in bundled
+            @test "libjulia-codegen.dll" in bundled
+            @test any(startswith("libLLVM"), bundled)
+
+            loaded = load_in_julia_process(product)
+            @test success(loaded.proc)
+            @test occursin("RESULT=42", loaded.output)
+            bundled_dir = lowercase(abspath(bindir))
+            for dll in bundled
+                dirs = get(loaded.dirs_by_dll, lowercase(dll), Set{String}())
+                @test bundled_dir in dirs
+                @test any(!=(bundled_dir), dirs)
+            end
+        end
+    end
 end
 
 @testset "Privatization salts" begin
@@ -313,6 +416,30 @@ end
     end
 end
 
+@testset "Windows loader dependency list" begin
+    # `fix_libjulia_libpath!` only rewrites bytes, so it is testable on every platform.
+    function salted(list, present)
+        path = joinpath(mktempdir(), "libjulia.dll")
+        write(path, [b"head\0"; codeunits(list); zeros(UInt8, 8); b"tail"])
+        JuliaC.fix_libjulia_libpath!(path, present, "abcd1234")
+        data = read(path)
+        @test data[1:5] == b"head\0" && data[end-11:end] == [zeros(UInt8, 8); b"tail"]
+        return String(data[6:end-12])
+    end
+    prefix = "libgcc_s_seh-1.dll:libopenlibm.dll:@:"
+    list = prefix * "@libjulia-internal.dll:@libjulia-codegen.dll:"
+    # Entries for shipped DLLs are left alone.
+    @test salted(list, ["libjulia.dll", "libjulia-internal.dll", "libjulia-codegen.dll"]) == list
+    # The entry for an omitted DLL keeps its place and length but names nothing.
+    @test salted(list, ["libjulia.dll", "libjulia-internal.dll"]) ==
+        prefix * "@libjulia-internal.dll:@abcd1234________.dll:"
+    # Debug builds of Julia suffix the names.
+    debug = prefix * "@libjulia-internal-debug.dll:@libjulia-codegen-debug.dll:"
+    @test salted(debug, ["libjulia-debug.dll", "libjulia-internal-debug.dll"]) ==
+        prefix * "@libjulia-internal-debug.dll:@abcd1234" * "_"^14 * ".dll:"
+    @test_throws "could not locate" salted("libgcc_s_seh-1.dll:", String[])
+end
+
 @testset "Programmatic binary (trim)" begin
     outdir = mktempdir()
     exeout = joinpath(outdir, "prog_exe")
@@ -333,6 +460,15 @@ end
     @test isfile(actual_exe)
     output = read(`$actual_exe`, String)
     @test occursin("Fast compilation test!", output)
+
+    # Privatizing an executable leaves it runnable.
+    if Sys.iswindows()
+        privdir = mktempdir()
+        privlink = JuliaC.LinkRecipe(image_recipe=img, outname=joinpath(privdir, "prog_exe"), rpath=JuliaC.RPATH_BUNDLE)
+        JuliaC.link_products(privlink)
+        JuliaC.bundle_products(JuliaC.BundleRecipe(link_recipe=privlink, output_dir=privdir, privatize=true))
+        @test occursin("Fast compilation test!", read(`$(privlink.outname)`, String))
+    end
 end
 
 @testset "Suffix handling" begin

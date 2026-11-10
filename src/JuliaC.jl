@@ -74,6 +74,7 @@ include("patchversion.jl")
 include("privatize_common.jl")
 include("privatize_linux.jl")
 include("privatize_macos.jl")
+include("privatize_windows.jl")
 
 export ImageRecipe, LinkRecipe, BundleRecipe
 export compile_products, link_products, bundle_products
@@ -100,7 +101,7 @@ function _print_usage(io::IO=stdout)
     println(io, "  --project <path>            Project to instantiate/precompile")
     println(io, "  --bundle <dir>              Bundle libjulia, stdlibs, and artifacts")
     println(io, "  --bundle-lazy-artifacts     Also bundle lazy artifacts (off by default)")
-    println(io, "  --privatize[=<salt>]        Privatize bundled libjulia (Unix), optionally with an explicit salt")
+    println(io, "  --privatize[=<salt>]        Privatize bundled libjulia, optionally with an explicit salt")
     println(io, "  --trim[=mode]               Strip IR/metadata (e.g. --trim=safe)")
     println(io, "  --compile-ccallable         Export ccallable entrypoints")
     println(io, "  --jl-option <key=value>     Set a Julia option using CLI syntax (supported: handle-signals=[yes/no], threads=[N])")
