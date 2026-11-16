@@ -68,6 +68,59 @@ function absolutize_paths!(project_dir, basedir)
     return nothing
 end
 
+"""
+    TRIM_PREFERENCE
+
+Name of the preference that JuliaC sets to `true`, for every package in the environment
+being compiled, when trimming is enabled. A package can load it at compile time to leave
+out code that should not end up in a trimmed binary:
+
+    using Preferences
+    const JULIAC_TRIM = @load_preference("juliac_trim", false)
+"""
+const TRIM_PREFERENCE = "juliac_trim"
+
+# Set `TRIM_PREFERENCE` for every package in the environment of `project_toml`: the
+# project itself (if it is a package) and the contents of its manifest.
+#
+# Preferences are only tracked per package: a precompile cache is keyed on the
+# preferences its own package loaded, so a single preference under JuliaC's UUID would
+# not cause the packages reading it to be recompiled. Setting it under each package's
+# own name does, and only for the packages that actually load it.
+function set_trim_preferences!(project_toml::AbstractString)
+    project = TOML.parsefile(project_toml)
+    pkgs = Tuple{Base.UUID,String}[]
+    name, uuid = get(project, "name", nothing), get(project, "uuid", nothing)
+    if name isa String && uuid isa String
+        push!(pkgs, (Base.UUID(uuid), name))
+    end
+    manifest_file = Base.project_file_manifest_path(String(project_toml))
+    if manifest_file !== nothing && isfile(manifest_file)
+        for (dep, entries) in Base.get_deps(TOML.parsefile(manifest_file)), entry in entries
+            dep_uuid = get(entry, "uuid", nothing)
+            dep_uuid isa String && push!(pkgs, (Base.UUID(dep_uuid), dep))
+        end
+    end
+
+    extras = get!(Dict{String,Any}, project, "extras")
+    prefs = get!(Dict{String,Any}, project, "preferences")
+    for (uuid, name) in pkgs
+        # Preferences are looked up under the name the project knows the package by,
+        # which a package that is not a direct dependency only has through `[extras]`.
+        known = Base.get_uuid_name(project, uuid)
+        if known === nothing
+            # Two packages may share a name, but `[extras]` can only map it to one UUID
+            known = haskey(extras, name) ? string(name, "-", uuid) : name
+            extras[known] = string(uuid)
+        end
+        get!(Dict{String,Any}, prefs, known)[TRIM_PREFERENCE] = true
+    end
+    open(project_toml, "w") do io
+        TOML.print(io, project; sorted = true)
+    end
+    return nothing
+end
+
 function run_with_suppressed_output(cmd::Base.AbstractCmd; quiet::Bool)
     if quiet
         buf = IOBuffer()
@@ -203,27 +256,40 @@ function compile_products(recipe::ImageRecipe)
     # to JuliaC's own project, which would break user project compilation — #106/#124).
     env_overrides = Dict{String,Any}("JULIA_LOAD_PATH" => nothing)
 
+    # Preferences are injected directly into the temp project copy so they're visible
+    # without JULIA_LOAD_PATH manipulation.
+    tmp_project_toml = project_arg
+    if isdir(project_arg)
+        # The file Julia will use for `--project=<dir>`, which may be `JuliaProject.toml`
+        located = Base.env_project_file(project_arg)
+        tmp_project_toml = located isa String ? located : joinpath(project_arg, "Project.toml")
+    end
     if is_trim_enabled(recipe)
-        # Inject the HostCPUFeatures `freeze_cpu_target` preference directly into the
-        # temp project copy so it's visible without JULIA_LOAD_PATH manipulation.
-        tmp_project_dir = isdir(project_arg) ? project_arg : dirname(project_arg)
         Preferences.set_preferences!(
             (Base.UUID("3e5b6fbb-0976-4d2c-9146-d79de83f2fb0"), "HostCPUFeatures"),
             "freeze_cpu_target" => true;
-            project_toml = joinpath(tmp_project_dir, "Project.toml"),
+            project_toml = tmp_project_toml,
             export_prefs = true,
             force = true,
         )
     end
 
     jit_target = recipe.cpu_target === nothing ? nothing : first_cpu_target(recipe.cpu_target)
-    inst_cmd = addenv(`$(build_julia_cmd(cpu_target=jit_target)) --project=$project_arg -e "using Pkg; Pkg.instantiate(); Pkg.precompile()"`,
-                      env_overrides..., "JULIA_CPU_TARGET" => recipe.cpu_target)
-    recipe.verbose && println("Running: $inst_cmd")
-    precompile_time = time_ns()
-    if !run_with_suppressed_output(inst_cmd; quiet=recipe.quiet)
-        error("Error encountered during instantiate/precompile of app project.")
+    function run_pkg(code, env...)
+        pkg_cmd = addenv(`$(build_julia_cmd(cpu_target=jit_target)) --project=$project_arg -e $code`,
+                         env_overrides..., "JULIA_CPU_TARGET" => recipe.cpu_target, env...)
+        recipe.verbose && println("Running: $pkg_cmd")
+        if !run_with_suppressed_output(pkg_cmd; quiet=recipe.quiet)
+            error("Error encountered during instantiate/precompile of app project.")
+        end
     end
+    precompile_time = time_ns()
+    # The packages to set the trim preference for are only known once the manifest is
+    # resolved, and they must see it before they are precompiled, so instantiate without
+    # precompiling first.
+    run_pkg("using Pkg; Pkg.instantiate()", "JULIA_PKG_PRECOMPILE_AUTO" => "0")
+    is_trim_enabled(recipe) && set_trim_preferences!(tmp_project_toml)
+    run_pkg("using Pkg; Pkg.precompile()")
     # Record the instantiated project dir for future bundling steps, cleanup, etc.
     recipe.instantiated_project = tmp_project
     recipe.verbose && println("Precompilation took $((time_ns() - precompile_time)/1e9) s")

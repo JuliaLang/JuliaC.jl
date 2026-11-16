@@ -72,6 +72,29 @@ end
     @test lines[8] == "regex: julia a#b#c# 4 true"
 end
 
+@testset "Trimming: `juliac_trim` preference" begin
+    # TrimPrefApp only reaches TrimPrefDep through TrimPrefMid, and TrimPrefDep has code
+    # that cannot be trimmed unless it sees the preference. So this only compiles if the
+    # preference reaches a package that is not a direct dependency of the project.
+    outdir = mktempdir()
+    exeout = joinpath(outdir, "trimpref")
+
+    img = JuliaC.ImageRecipe(
+        file = abspath(joinpath(@__DIR__, "TrimPrefApp")),
+        output_type = "--output-exe",
+        trim_mode = "safe",
+        quiet = true,
+    )
+    JuliaC.compile_products(img)
+    link = JuliaC.LinkRecipe(image_recipe=img, outname=exeout)
+    JuliaC.link_products(link)
+    bun = JuliaC.BundleRecipe(link_recipe=link, output_dir=outdir)
+    JuliaC.bundle_products(bun)
+
+    actual_exe = Sys.iswindows() ? joinpath(outdir, "bin", basename(exeout) * ".exe") : joinpath(outdir, "bin", basename(exeout))
+    @test readchomp(`$actual_exe`) == "trimmed"
+end
+
 @testset "Trimming: libsimple.jl C application test" begin
     outdir = mktempdir()
     libout = joinpath(outdir, "libsimple")

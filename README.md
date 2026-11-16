@@ -128,6 +128,35 @@ binary size:
 
 On certain builds, `--trim` requires `--experimental` (JuliaC will pass it through if needed).
 
+#### Detecting trimming from a package
+
+When trimming is enabled, JuliaC sets the `juliac_trim` preference to `true` for every package
+in the environment being compiled. A package can load it with
+[Preferences.jl](https://github.com/JuliaPackaging/Preferences.jl) to leave out code that cannot
+be trimmed, or that has no place in a compiled binary, such as development-time diagnostics:
+
+```julia
+using Preferences
+
+const JULIAC_TRIM = @load_preference("juliac_trim", false)
+
+@static if JULIAC_TRIM
+    warn_if_precompiling() = nothing
+else
+    function warn_if_precompiling()
+        # ... code that is not trimmable ...
+    end
+end
+```
+
+This is a compile-time preference, so a package that loads it (and everything depending on
+that package) is precompiled separately for trimmed builds. Packages that do not load it are
+unaffected.
+
+Package extensions cannot load the preference themselves, since Julia does not look up
+preferences for an extension. Load it in the parent package and refer to that constant from
+the extension instead.
+
 ### C-callable entrypoints
 
 If you pass `--compile-ccallable` (or set `ImageRecipe.add_ccallables = true`), JuliaC will export `ccallable` entrypoints discovered in your code. This is often used when building libraries intended to be called from C or other languages.
