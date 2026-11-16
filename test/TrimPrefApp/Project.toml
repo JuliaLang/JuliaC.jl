@@ -1,0 +1,9 @@
+name = "TrimPrefApp"
+uuid = "c3e7a9d1-4b52-4f6a-b0d8-7a1e5c2f9b33"
+version = "0.1.0"
+
+[deps]
+TrimPrefMid = "8b1f5a0c-6f0e-4d57-8e0a-3c9c2b6d4f22"
+
+[sources]
+TrimPrefMid = {path = "../TrimPrefMid"}
