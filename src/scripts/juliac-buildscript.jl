@@ -199,7 +199,11 @@ end
 # this last to avoid re-inferring JuliaLowering
 if Base.JLOptions().trim != 0
     @eval Base begin
-        invokelatest_trimmed(f, args...; kwargs...) = f(args...; kwargs...)
+        # `f::F` makes each call specialize on the function's type. Julia does not
+        # otherwise specialize on an argument of type `Function` that is only passed
+        # on, so a call that is not inlined, such as one on an error path, would run
+        # a copy compiled for `f::Function`, whose call to `f` is unresolved.
+        invokelatest_trimmed(f::F, args...; kwargs...) where {F} = f(args...; kwargs...)
         const invokelatest = invokelatest_trimmed
     end
 end
