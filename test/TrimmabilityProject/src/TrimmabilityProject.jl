@@ -99,6 +99,25 @@ function _test_regex()
     return string("regex: ", user, " ", replaced, " ", vowels, " ", occursin(r"^tr", "trim"))
 end
 
+# `invokelatest` of closures on an error path, where the call is not inlined
+function _test_invokelatest(args::Vector{String})
+    n = length(args)
+    f = x -> throw(ArgumentError(string(x + n)))
+    g = (a, b) -> throw(ArgumentError(string(a + b + n)))
+    caught = 0
+    try
+        Base.invokelatest(f, n)
+    catch err
+        err isa ArgumentError && (caught += 1)
+    end
+    try
+        Base.invokelatest(g, n, 2)
+    catch err
+        err isa ArgumentError && (caught += 1)
+    end
+    return string("invokelatest: caught ", caught)
+end
+
 function @main(args::Vector{String})::Cint
     println(Core.stdout, str())
     println(Core.stdout, PROGRAM_FILE)
@@ -120,6 +139,7 @@ function @main(args::Vector{String})::Cint
     println(Core.stdout, _test_cat())
     println(Core.stdout, _test_nested_reductions())
     println(Core.stdout, _test_regex())
+    println(Core.stdout, _test_invokelatest(args))
 
     try
         sock = connect("localhost", 4900)
