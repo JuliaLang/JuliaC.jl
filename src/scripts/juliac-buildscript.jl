@@ -199,11 +199,12 @@ end
 # this last to avoid re-inferring JuliaLowering
 if Base.JLOptions().trim != 0
     @eval Base begin
-        # `f::F` makes each call specialize on the function's type. Julia does not
-        # otherwise specialize on an argument of type `Function` that is only passed
-        # on, so a call that is not inlined, such as one on an error path, would run
-        # a copy compiled for `f::Function`, whose call to `f` is unresolved.
-        invokelatest_trimmed(f::F, args...; kwargs...) where {F} = f(args...; kwargs...)
+        # Keyword lowering makes this a positional method that only passes `f` and `args` on to
+        # the keyword body, and Julia does not specialize such `Function` and `Vararg` arguments.
+        # `F` and `N` force it to, so a call that is not inlined, such as one on an error path,
+        # keeps concrete types. Without them, the trim verifier rejects the call to the keyword
+        # body, or with more than one argument accepts it and the binary fails at runtime.
+        invokelatest_trimmed(f::F, args::Vararg{Any,N}; kwargs...) where {F,N} = f(args...; kwargs...)
         const invokelatest = invokelatest_trimmed
     end
 end

@@ -59,7 +59,7 @@ end
     # 6. _test_cat() result (a Float64)
     # 7. nested reductions with `init` inside a generator reduction
     # 8. regular expressions
-    # 9. `invokelatest` of a closure that throws
+    # 9. `invokelatest` of closures that throw, with one and two arguments
     output = readchomp(`$actual_exe arg1 arg2`)
     lines = split(output, '\n')
     @test length(lines) >= 9
@@ -71,7 +71,7 @@ end
     @test parse(Float64, lines[6]) isa Float64
     @test lines[7] == "nested reductions: 2 9.0"
     @test lines[8] == "regex: julia a#b#c# 4 true"
-    @test lines[9] == "invokelatest: caught"
+    @test lines[9] == "invokelatest: caught 2"
 end
 
 @testset "Trimming: libsimple.jl C application test" begin
