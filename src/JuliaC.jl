@@ -203,6 +203,12 @@ function _parse_cli_args(args::Vector{String})
 
     link_recipe.outname == "" && error("No output file specified")
     image_recipe.file == "" && error("No input file specified")
+    if image_recipe.output_type == "--output-o" || image_recipe.output_type == "--output-bc"
+        # The object/bitcode archive is the final product: compile it straight to the requested
+        # path (there is no link or bundle step for these output types)
+        bundle_specified && error("--bundle cannot be used with $(image_recipe.output_type)")
+        image_recipe.img_path = abspath(link_recipe.outname)
+    end
     bundle_recipe.bundle_lazy_artifacts && !bundle_specified &&
             error("--bundle-lazy-artifacts requires --bundle")
 
@@ -225,6 +231,11 @@ function _main_cli(args::Vector{String}; io::IO=stdout)
         return
     end
     img, link, bun = _parse_cli_args(args)
+    if img.output_type == "--output-o" || img.output_type == "--output-bc"
+        mkpath(dirname(img.img_path))
+        compile_products(img)
+        return
+    end
     compile_products(img)
     link_products(link)
     bundle_products(bun)
