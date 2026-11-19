@@ -1,0 +1,4 @@
+name = "EntryfileProject"
+uuid = "5d0c3e0e-8f5a-4b8e-9a51-2f3c6e1b7a42"
+version = "0.1.0"
+entryfile = "../EntryfileSource/EntryfileProject.jl"
