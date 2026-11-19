@@ -654,3 +654,34 @@ end
     output = read(`$output_exe`, String)
     @test occursin("hello from a relative-path dependency", output)
 end
+
+@testset "Relative `entryfile` path (#199)" begin
+    # A project whose source lies outside its directory, found through a
+    # relative `entryfile`, as in the environment of JuliaC installed as a Pkg
+    # app on Julia 1.14. The path must still resolve from the project's copy.
+    proj = abspath(joinpath(@__DIR__, "EntryfileProject"))
+    outdir = mktempdir()
+    exeout = joinpath(outdir, "entryfile_app")
+
+    img = JuliaC.ImageRecipe(
+        file = abspath(joinpath(@__DIR__, "EntryfileSource", "main.jl")),
+        output_type = "--output-exe",
+        project = proj,
+        trim_mode = "safe",
+        quiet = true,
+    )
+    JuliaC.compile_products(img)
+    link = JuliaC.LinkRecipe(image_recipe=img, outname=exeout, rpath=JuliaC.RPATH_BUNDLE)
+    JuliaC.link_products(link)
+    bun = JuliaC.BundleRecipe(link_recipe=link, output_dir=outdir)
+    JuliaC.bundle_products(bun)
+
+    output_exe = if Sys.iswindows()
+        joinpath(outdir, "bin", basename(exeout) * ".exe")
+    else
+        joinpath(outdir, "bin", basename(exeout))
+    end
+    @test isfile(output_exe)
+    output = read(`$output_exe`, String)
+    @test occursin("hello from a relative entryfile", output)
+end

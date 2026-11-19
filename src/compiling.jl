@@ -39,9 +39,11 @@ end
 
 function _absolutize_paths!(x, base)
     if x isa AbstractDict
-        p = get(x, "path", nothing)
-        if p isa AbstractString && !isabspath(p)
-            x["path"] = abspath(joinpath(base, p))
+        for key in ("path", "entryfile")
+            p = get(x, key, nothing)
+            if p isa AbstractString && !isabspath(p)
+                x[key] = abspath(joinpath(base, p))
+            end
         end
         for v in values(x)
             _absolutize_paths!(v, base)
@@ -53,7 +55,8 @@ function _absolutize_paths!(x, base)
     end
 end
 
-# Replace `[sources]` with absolute paths, referenced to `basedir`
+# Replace relative paths in `[sources]` and `entryfile` with absolute paths,
+# referenced to `basedir`
 function absolutize_paths!(project_dir, basedir)
     for f in readdir(project_dir)
         occursin(r"^(Julia)?(Project|Manifest).*\.toml$", f) || continue
